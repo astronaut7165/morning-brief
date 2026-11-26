@@ -1,0 +1,8 @@
+feedparser>=6.0.11,<7
+requests>=2.32,<3
+PyYAML>=6.0,<7
+
+# ── LLM SDK: 사용하는 provider 것 하나만 있으면 됩니다 (기본 anthropic) ──
+anthropic>=2.14,<3
+# openai>=3.0,<4          # LLM_PROVIDER=openai 일 때 주석 해제
+# google-genai>=3.0,<4    # LLM_PROVIDER=gemini 일 때 주석 해제

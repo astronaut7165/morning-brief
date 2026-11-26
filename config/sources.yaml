@@ -1,0 +1,186 @@
+# =============================================================================
+# Morning Brief — 수집 소스 & 브리핑 설정
+# =============================================================================
+# 지원하는 소스 type
+#   rss          일반 RSS/Atom 피드                  필수: url
+#   google_news  Google News 키워드 검색 RSS         필수: query   선택: lang (ko | en, 기본 ko)
+#   hackernews   Hacker News (Algolia API)           선택: min_points (기본 100)
+#
+# 모든 소스 공통 선택 필드
+#   enabled: false   수집에서 제외
+#   max_items: 20    이 소스에서 가져올 최대 건수 (settings.max_items_per_source 를 덮어씀)
+#   tags: [..]       분류 태그. LLM 판단 힌트로 쓰이고 아카이브에도 표시됨
+#   naive_utc_offset: 9   (rss) 날짜에 시간대 표기가 없는 피드의 실제 UTC 오프셋(시간). 예: KST=9
+#
+# 새 수집 방식(예: 특정 API)이 필요하면 src/collector.py 의 @fetcher("<type>") 를 하나 추가하면 됩니다.
+# =============================================================================
+
+settings:
+  lookback_hours: 24          # 최근 N시간 안에 발행된 기사만 수집
+  max_items_per_source: 15    # 소스 하나에서 가져올 최대 건수
+  max_candidates: 150         # LLM에 넘길 최대 후보 수 (비용 상한)
+  top_n: 6                    # 브리핑에 담을 상위 기사 수 (5~7 권장)
+  min_score: 3                # 이 점수 미만은 Top Picks에서 제외 (1~5)
+  seen_retention_days: 14     # 이전 브리핑과의 중복 제거 기록을 며칠 보관할지
+
+# LLM이 '누구의 관점'에서 점수를 매기고 요약할지 정합니다. 본인 상황에 맞게 고쳐 쓰세요.
+reader_profile: |
+  - 한국에서 IT/AI 기반 신사업과 업무 자동화를 고민하는 실무자이자 예비 창업자
+  - 관심사: 생성형 AI 활용, B2B SaaS, 업무 자동화, 스타트업 투자 동향, 빅테크 전략 변화
+  - 원하는 것: "그래서 나는 무엇을 해볼 수 있나?"에 답하는 사업 기회와 실무 적용 아이디어
+
+sources:
+  # ── 글로벌 테크 / 스타트업 ──────────────────────────────────────────
+  - name: Hacker News
+    type: hackernews
+    min_points: 150
+    tags: [tech, dev]
+
+  - name: TechCrunch
+    type: rss
+    url: https://techcrunch.com/feed/
+    tags: [startup, tech]
+
+  - name: The Verge
+    type: rss
+    url: https://www.theverge.com/rss/index.xml
+    tags: [tech, bigtech]
+
+  - name: Ars Technica
+    type: rss
+    url: https://feeds.arstechnica.com/arstechnica/index
+    tags: [tech]
+
+  - name: WIRED
+    type: rss
+    url: https://www.wired.com/feed/rss
+    tags: [tech]
+
+  - name: MIT Technology Review
+    type: rss
+    url: https://www.technologyreview.com/feed/
+    tags: [tech, research]
+
+  - name: Product Hunt
+    type: rss
+    url: https://www.producthunt.com/feed
+    max_items: 10
+    tags: [product]
+
+  - name: Stratechery
+    type: rss
+    url: https://stratechery.com/feed/
+    tags: [strategy]
+
+  # ── AI ─────────────────────────────────────────────────────────────
+  - name: OpenAI News
+    type: rss
+    url: https://openai.com/news/rss.xml
+    tags: [ai, bigtech]
+
+  - name: Google AI Blog
+    type: rss
+    url: https://blog.google/technology/ai/rss/
+    tags: [ai, bigtech]
+
+  - name: Hugging Face Blog
+    type: rss
+    url: https://huggingface.co/blog/feed.xml
+    tags: [ai, dev]
+
+  - name: Simon Willison
+    type: rss
+    url: https://simonwillison.net/atom/everything/
+    tags: [ai, dev]
+
+  - name: Google News · AI startup funding
+    type: google_news
+    query: AI startup funding
+    lang: en
+    max_items: 10
+    tags: [ai, investment]
+
+  # ── 국내 ───────────────────────────────────────────────────────────
+  - name: GeekNews
+    type: rss
+    url: https://news.hada.io/rss/news
+    tags: [tech, dev, korea]
+
+  - name: 전자신문
+    type: rss
+    url: https://rss.etnews.com/Section901.xml
+    tags: [tech, korea]
+
+  - name: ZDNet Korea
+    type: rss
+    url: https://feeds.feedburner.com/zdkorea
+    tags: [tech, korea]
+
+  - name: 블로터
+    type: rss
+    url: https://www.bloter.net/rss/allArticle.xml
+    naive_utc_offset: 9       # pubDate 에 시간대 표기가 없는 KST 시각이라 보정
+    tags: [tech, business, korea]
+
+  - name: 바이라인네트워크
+    type: rss
+    url: https://byline.network/feed/
+    tags: [tech, business, korea]
+
+  - name: 플래텀
+    type: rss
+    url: https://platum.kr/feed
+    tags: [startup, korea]
+
+  - name: Google News · 스타트업 투자
+    type: google_news
+    query: 스타트업 투자 유치
+    lang: ko
+    max_items: 10
+    tags: [startup, investment, korea]
+
+# =============================================================================
+# 산업군 트래킹
+# enabled: true 로 바꾸면 해당 sources 가 수집에 합류하고,
+# description 이 LLM 프롬프트의 '중점 관찰 분야'로 전달되어 관련 기사에 가중치가 붙습니다.
+# 새 산업군은 아래 형식을 복사해 키 이름만 바꿔 추가하세요.
+# =============================================================================
+tracks:
+  semiconductor:
+    enabled: false
+    description: 반도체·HBM·파운드리 공급망, 가격, 설비 투자 동향
+    sources:
+      - name: Google News · 반도체
+        type: google_news
+        query: 반도체 OR HBM OR 파운드리
+        lang: ko
+        max_items: 10
+        tags: [semiconductor]
+
+  healthcare_ai:
+    enabled: false
+    description: 디지털 헬스케어·의료 AI의 규제, 인허가, 투자
+    sources:
+      - name: Google News · 의료 AI
+        type: google_news
+        query: 의료 AI OR 디지털 헬스케어
+        lang: ko
+        max_items: 10
+        tags: [healthcare]
+      - name: Google News · Healthcare AI
+        type: google_news
+        query: healthcare AI FDA
+        lang: en
+        max_items: 10
+        tags: [healthcare]
+
+  fintech:
+    enabled: false
+    description: 핀테크·결제·디지털자산 규제와 신규 서비스
+    sources:
+      - name: Google News · 핀테크
+        type: google_news
+        query: 핀테크 OR 간편결제 OR 스테이블코인
+        lang: ko
+        max_items: 10
+        tags: [fintech]
