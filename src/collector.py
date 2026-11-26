@@ -47,6 +47,9 @@ class Article:
     extra: dict = field(default_factory=dict)  # points, comments, discussion_url, publisher ...
     also_in: list[tuple[str, str]] = field(default_factory=list)  # 같은 기사를 보도한 (소스, URL)
 
+    def __post_init__(self) -> None:
+        self.url = strip_tracking(self.url)
+
     @property
     def key(self) -> str:
         return hashlib.sha1(normalize_url(self.url).encode()).hexdigest()[:16]
@@ -86,6 +89,8 @@ _WS_RE = re.compile(r"\s+")
 _TRACKING_PARAM_RE = re.compile(
     r"^(utm_.*|fbclid|gclid|dclid|mc_cid|mc_eid|igshid|ref|ref_src|cmpid|ncid|spm|from)$", re.I
 )
+# 표시용 URL 에서 지울 파라미터 (기사 식별에는 영향이 없는 것만)
+_DISPLAY_STRIP_RE = re.compile(r"^(utm_.*|fbclid|gclid|dclid|mc_cid|mc_eid|igshid)$", re.I)
 _TITLE_NOISE_RE = re.compile(r"[^\w]+", re.UNICODE)
 _HAS_TZ_RE = re.compile(r"(Z|[+-]\d{2}:?\d{2}|\b[A-Z]{2,4})\s*$")
 
@@ -99,6 +104,18 @@ def clean_text(raw: str | None, limit: int | None = None) -> str:
     if limit and len(text) > limit:
         text = text[: limit - 1].rstrip() + "…"
     return text
+
+
+def strip_tracking(url: str) -> str:
+    """utm_* 같은 추적 파라미터만 지운다. 해당 파라미터가 없으면 URL을 그대로 둔다."""
+    parts = urlsplit(url.strip())
+    if not parts.query:
+        return url.strip()
+    params = parse_qsl(parts.query, keep_blank_values=True)
+    kept = [(k, v) for k, v in params if not _DISPLAY_STRIP_RE.match(k)]
+    if len(kept) == len(params):
+        return url.strip()
+    return urlunsplit(parts._replace(query=urlencode(kept)))
 
 
 def normalize_url(url: str) -> str:

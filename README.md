@@ -1,11 +1,11 @@
 # 🌅 Morning Brief
 
-매일 아침 기술·비즈니스 동향을 자동으로 모으고, Claude로 **사업 기회와 실무 적용 관점**에서 골라 요약해 메신저로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
+매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업 기회·실무 적용 관점의 종합 분석**을 붙여 메신저로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
 
 ```
 내 Mac (launchd, 매일 07:00)
   └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거
-  └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고 상위 5~7건 요약
+  └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고, 상위 5~7건의 사실 정리 + 종합 분석
   └─ archiver   vault/raw/YYYY/MM/YYYY-MM-DD.md 로 저장
   └─ notifier   Slack / Discord / Telegram 으로 발송
   └─ git commit & push
@@ -24,7 +24,7 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 │   └── run_local.sh                      # pull → 브리핑 → 커밋·push
 ├── src/
 │   ├── collector.py                      # 소스별 수집, 중복 제거
-│   ├── analyzer.py                       # LLM 점수화(1~5) · 상위 기사 요약
+│   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 종합 분석
 │   ├── notifier.py                       # 메신저 발송
 │   ├── archiver.py                       # 마크다운 생성
 │   └── main.py                           # 전체 파이프라인 실행
@@ -78,7 +78,7 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
 
 ## 설정 바꾸기 — `config/sources.yaml`
 
-- **관점 조정 (가장 중요)**: `reader_profile` 을 내 상황·관심 산업·고민 중인 사업에 맞게 구체적으로 쓰면 점수와 '실무 적용' 제안이 날카로워집니다.
+- **관점 조정 (가장 중요)**: `reader_profile` 을 내 상황·관심 산업·고민 중인 사업에 맞게 구체적으로 쓰면 점수와 마지막 종합 분석(사업 기회·실무 적용)이 날카로워집니다.
 - **소스 추가**: `sources` 에 항목을 하나 추가합니다. 지원 type은 `rss`, `google_news`(키워드 검색), `hackernews` 입니다.
   ```yaml
   - name: 내가 보는 블로그
@@ -92,7 +92,7 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
 
 ## Vault 활용
 
-- `vault/raw/` 는 자동화만 씁니다. 매일 Top Picks(요약·사업 기회·실무 적용)와 전체 후보 목록(점수순), 소스별 수집 현황이 남습니다.
+- `vault/raw/` 는 자동화만 씁니다. 매일 오늘의 소식(기사별 사실·발행일·관련 보도), 종합 분석(흐름·사업 기회·이번 주 실무 적용), 전체 후보 목록(점수순, 2점 이하는 접힘), 소스별 수집 현황이 남습니다.
 - `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요. 자동 커밋은 `vault/raw` 와 `state` 만 올리므로 작성 중인 노트가 섞여 올라가지 않습니다.
 - 이 폴더를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다. 메신저 메시지의 '전체 브리핑 보기' 링크는 push 된 GitHub 파일로 연결됩니다.
 

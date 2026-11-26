@@ -17,13 +17,15 @@ from typing import Callable
 
 import requests
 
-from analyzer import Briefing, Pick
-from archiver import title_line
+from analyzer import Briefing, Insight, Pick
+from archiver import published_label, refs_label, title_line
 
 log = logging.getLogger(__name__)
 
 SCORE_COLORS = {5: 0xE8590C, 4: 0xF59F00, 3: 0x4DABF7}  # Discord embed 색상
 DEFAULT_COLOR = 0x868E96
+ANALYSIS_COLOR = 0x7048E8
+ANALYSIS_TITLE = "🧭 종합 분석 — 사업 기회·실무 적용 관점"
 
 
 class NotifyError(RuntimeError):
@@ -64,7 +66,7 @@ def _stats_line(b: Briefing) -> str:
 
 def _warning(b: Briefing) -> str | None:
     if b.error:
-        return "⚠️ LLM 분석 실패로 기본 정렬 결과입니다. 자세한 내용은 Actions 로그를 확인하세요."
+        return "⚠️ LLM 분석 실패로 기본 정렬 결과입니다. 자세한 내용은 실행 로그를 확인하세요."
     return None
 
 
@@ -78,9 +80,31 @@ def _meta(p: Pick) -> str:
     if p.article.extra.get("publisher"):
         source = p.article.extra["publisher"]
     parts.append(source)
+    parts.append(f"{published_label(p.article)} 발행")
     if p.article.also_in:
         parts.append(f"외 {len(p.article.also_in)}곳 보도")
     return " · ".join(parts)
+
+
+def _insight_lines(items: list[Insight], fmt: Callable[[str], str]) -> list[str]:
+    out = []
+    for it in items:
+        ref = refs_label(it.refs)
+        out.append(f"• {fmt(it.text)}" + (f" {ref}" if ref else ""))
+    return out
+
+
+def _analysis_parts(b: Briefing, fmt: Callable[[str], str], bold: Callable[[str], str]) -> list[str]:
+    """종합 분석을 문단 목록으로. fmt 는 채널별 이스케이프, bold 는 채널별 굵게."""
+    a = b.analysis
+    parts = []
+    if a.overview:
+        parts.append(fmt(a.overview))
+    if a.opportunities:
+        parts.append("\n".join([bold("💡 사업 기회")] + _insight_lines(a.opportunities, fmt)))
+    if a.actions:
+        parts.append("\n".join([bold("🛠 이번 주 실무 적용")] + _insight_lines(a.actions, fmt)))
+    return parts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,15 +133,13 @@ def build_slack_payload(b: Briefing, archive_url: str | None) -> dict:
     for rank, p in enumerate(b.picks, 1):
         title = _slack_escape(p.title).replace("|", "｜")
         lines = [f"*{rank}. <{_slack_escape(p.article.url)}|{title}>*", f"_{_slack_escape(_meta(p))}_"]
-        if p.summary:
-            lines.append(_slack_escape(p.summary))
-        if p.opportunity:
-            lines.append(f"💡 *사업 기회* {_slack_escape(p.opportunity)}")
-        if p.action:
-            lines.append(f"🛠 *실무 적용* {_slack_escape(p.action)}")
+        lines += [f"• {_slack_escape(f)}" for f in p.facts]
         blocks.append(section("\n".join(lines)))
     if not b.picks:
         blocks.append(section("오늘은 기준 점수를 넘은 기사가 없습니다."))
+    if b.analysis:
+        blocks += [{"type": "divider"}, section(f"*{ANALYSIS_TITLE}*")]
+        blocks += [section(part) for part in _analysis_parts(b, _slack_escape, lambda t: f"*{t}*")]
 
     footer = _stats_line(b)
     if archive_url:
@@ -147,17 +169,19 @@ def build_discord_messages(b: Briefing, archive_url: str | None) -> list[dict]:
 
     embeds = []
     for rank, p in enumerate(b.picks, 1):
-        desc = [p.summary] if p.summary else []
-        if p.opportunity:
-            desc.append(f"💡 **사업 기회** {p.opportunity}")
-        if p.action:
-            desc.append(f"🛠 **실무 적용** {p.action}")
         embeds.append({
             "title": f"{rank}. {p.title}"[:256],
             "url": p.article.url,
-            "description": "\n\n".join(desc)[:4000],
+            "description": "\n".join(f"• {f}" for f in p.facts)[:4000],
             "color": SCORE_COLORS.get(p.score or 0, DEFAULT_COLOR),
             "footer": {"text": _meta(p)[:2048]},
+        })
+    if b.analysis:
+        embeds.append({
+            "title": ANALYSIS_TITLE,
+            "description": "\n\n".join(_analysis_parts(b, str, lambda t: f"**{t}**"))[:4000],
+            "color": ANALYSIS_COLOR,
+            "footer": {"text": "위 소식들을 바탕으로 한 분석입니다"},
         })
 
     def size(e: dict) -> int:
@@ -202,15 +226,13 @@ def build_telegram_messages(b: Briefing, archive_url: str | None) -> list[str]:
             f'<b>{rank}. <a href="{esc(p.article.url, quote=True)}">{esc(p.title)}</a></b>',
             f"<i>{esc(_meta(p))}</i>",
         ]
-        if p.summary:
-            lines.append(esc(p.summary))
-        if p.opportunity:
-            lines.append(f"💡 <b>사업 기회</b> {esc(p.opportunity)}")
-        if p.action:
-            lines.append(f"🛠 <b>실무 적용</b> {esc(p.action)}")
+        lines += [f"• {esc(f)}" for f in p.facts]
         blocks.append("\n".join(lines)[:TELEGRAM_MSG_LIMIT])
     if not b.picks:
         blocks.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
+    if b.analysis:
+        blocks.append(f"<b>{esc(ANALYSIS_TITLE)}</b>")
+        blocks += [part[:TELEGRAM_MSG_LIMIT] for part in _analysis_parts(b, esc, lambda t: f"<b>{t}</b>")]
 
     footer = esc(_stats_line(b))
     if archive_url:
