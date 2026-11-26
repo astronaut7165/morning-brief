@@ -1,42 +1,47 @@
-"""메신저(웹훅) 브리핑 발송.
+"""메신저 브리핑 발송.
 
 환경변수가 설정된 채널로만 보낸다. 여러 채널을 동시에 켜도 된다.
   Slack     SLACK_WEBHOOK_URL                (Incoming Webhook, Mattermost 호환)
   Discord   DISCORD_WEBHOOK_URL
   Telegram  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+  KakaoTalk KAKAO_REST_API_KEY (+ KAKAO_CLIENT_SECRET) — '나에게 보내기'. 최초 1회 scripts/kakao_auth.py 실행
 웹훅 URL과 토큰은 비밀값이므로 오류 메시지·로그에 절대 넣지 않는다.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import logging
 import os
+import re
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable
 
 import requests
 
-from analyzer import Briefing, Insight, Pick
-from archiver import published_label, refs_label, title_line
+from analyzer import Briefing, Pick
+from archiver import ANALYSIS_SUBTITLE, ANALYSIS_TITLE, published_label, refs_label, title_line
 
 log = logging.getLogger(__name__)
 
 SCORE_COLORS = {5: 0xE8590C, 4: 0xF59F00, 3: 0x4DABF7}  # Discord embed 색상
 DEFAULT_COLOR = 0x868E96
 ANALYSIS_COLOR = 0x7048E8
-ANALYSIS_TITLE = "🧭 종합 분석 — 사업 기회·실무 적용 관점"
+ANALYSIS_HEADING = f"{ANALYSIS_TITLE} — {ANALYSIS_SUBTITLE}"
 
 
 class NotifyError(RuntimeError):
     pass
 
 
-def _post_json(url: str, payload: dict, label: str, attempts: int = 3) -> requests.Response:
-    """비밀 URL이 예외 메시지에 섞이지 않도록 감싼 POST. 429/5xx 는 재시도."""
+def _post(url: str, label: str, attempts: int = 3, **kwargs) -> requests.Response:
+    """비밀 URL·토큰이 예외 메시지에 섞이지 않도록 감싼 POST. 429/5xx 는 재시도."""
     for attempt in range(1, attempts + 1):
         try:
-            resp = requests.post(url, json=payload, timeout=20)
+            resp = requests.post(url, timeout=20, **kwargs)
         except requests.RequestException as exc:
             if attempt == attempts:
                 raise NotifyError(f"{label} 연결 실패 ({type(exc).__name__})") from None
@@ -86,24 +91,21 @@ def _meta(p: Pick) -> str:
     return " · ".join(parts)
 
 
-def _insight_lines(items: list[Insight], fmt: Callable[[str], str]) -> list[str]:
-    out = []
-    for it in items:
-        ref = refs_label(it.refs)
-        out.append(f"• {fmt(it.text)}" + (f" {ref}" if ref else ""))
-    return out
-
-
 def _analysis_parts(b: Briefing, fmt: Callable[[str], str], bold: Callable[[str], str]) -> list[str]:
-    """종합 분석을 문단 목록으로. fmt 는 채널별 이스케이프, bold 는 채널별 굵게."""
+    """사업가의 시선을 문단 목록으로. fmt 는 채널별 이스케이프, bold 는 채널별 굵게(이스케이프된 텍스트를 받음)."""
     a = b.analysis
     parts = []
     if a.overview:
-        parts.append(fmt(a.overview))
-    if a.opportunities:
-        parts.append("\n".join([bold("💡 사업 기회")] + _insight_lines(a.opportunities, fmt)))
-    if a.actions:
-        parts.append("\n".join([bold("🛠 이번 주 실무 적용")] + _insight_lines(a.actions, fmt)))
+        parts.append(f"{bold('큰 그림')} {fmt(a.overview)}")
+    for lens in a.lenses:
+        ref = refs_label(lens.refs)
+        lines = [bold(fmt(f"👀 {lens.name}")) + (f" {ref}" if ref else "")]
+        if lens.takeaway:
+            lines.append(f"→ {fmt(lens.takeaway)}")
+        lines.append(fmt(lens.insight))
+        if lens.question:
+            lines.append(f"❓ {fmt(lens.question)}")
+        parts.append("\n".join(lines))
     return parts
 
 
@@ -138,7 +140,7 @@ def build_slack_payload(b: Briefing, archive_url: str | None) -> dict:
     if not b.picks:
         blocks.append(section("오늘은 기준 점수를 넘은 기사가 없습니다."))
     if b.analysis:
-        blocks += [{"type": "divider"}, section(f"*{ANALYSIS_TITLE}*")]
+        blocks += [{"type": "divider"}, section(f"*{ANALYSIS_HEADING}*")]
         blocks += [section(part) for part in _analysis_parts(b, _slack_escape, lambda t: f"*{t}*")]
 
     footer = _stats_line(b)
@@ -149,7 +151,7 @@ def build_slack_payload(b: Briefing, archive_url: str | None) -> dict:
 
 
 def send_slack(b: Briefing, archive_url: str | None) -> None:
-    _post_json(os.environ["SLACK_WEBHOOK_URL"], build_slack_payload(b, archive_url), "Slack")
+    _post(os.environ["SLACK_WEBHOOK_URL"], "Slack", json=build_slack_payload(b, archive_url))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,7 +180,7 @@ def build_discord_messages(b: Briefing, archive_url: str | None) -> list[dict]:
         })
     if b.analysis:
         embeds.append({
-            "title": ANALYSIS_TITLE,
+            "title": ANALYSIS_HEADING,
             "description": "\n\n".join(_analysis_parts(b, str, lambda t: f"**{t}**"))[:4000],
             "color": ANALYSIS_COLOR,
             "footer": {"text": "위 소식들을 바탕으로 한 분석입니다"},
@@ -202,7 +204,7 @@ def build_discord_messages(b: Briefing, archive_url: str | None) -> list[dict]:
 def send_discord(b: Briefing, archive_url: str | None) -> None:
     url = os.environ["DISCORD_WEBHOOK_URL"]
     for message in build_discord_messages(b, archive_url):
-        _post_json(url, {**message, "allowed_mentions": {"parse": []}}, "Discord")
+        _post(url, "Discord", json={**message, "allowed_mentions": {"parse": []}})
         time.sleep(0.5)
 
 
@@ -231,7 +233,7 @@ def build_telegram_messages(b: Briefing, archive_url: str | None) -> list[str]:
     if not b.picks:
         blocks.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
     if b.analysis:
-        blocks.append(f"<b>{esc(ANALYSIS_TITLE)}</b>")
+        blocks.append(f"<b>{esc(ANALYSIS_HEADING)}</b>")
         blocks += [part[:TELEGRAM_MSG_LIMIT] for part in _analysis_parts(b, esc, lambda t: f"<b>{t}</b>")]
 
     footer = esc(_stats_line(b))
@@ -251,16 +253,182 @@ def build_telegram_messages(b: Briefing, archive_url: str | None) -> list[str]:
 def send_telegram(b: Briefing, archive_url: str | None) -> None:
     url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
     for text in build_telegram_messages(b, archive_url):
-        _post_json(
+        _post(
             url,
-            {
+            "Telegram",
+            json={
                 "chat_id": os.environ["TELEGRAM_CHAT_ID"],
                 "text": text,
                 "parse_mode": "HTML",
                 "link_preview_options": {"is_disabled": True},
             },
-            "Telegram",
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KakaoTalk — '나에게 보내기' (내 카카오톡 '나와의 채팅'으로 발송)
+#   텍스트 템플릿은 말풍선당 200자 제한이라 '헤더 / 기사별 / 시선별'로 나눠 보낸다.
+#   버튼 링크는 앱 설정 [제품 링크 관리 > 웹 도메인]에 등록된 도메인만 열리므로 전체 브리핑(GitHub) 하나로 통일한다.
+#   리프레시 토큰은 갱신 때마다 바뀔 수 있어 .env 가 아닌 저장소 밖 파일(KAKAO_TOKEN_FILE)에 보관한다.
+# ─────────────────────────────────────────────────────────────────────────────
+KAKAO_TEXT_LIMIT = 200
+KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
+KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
+KAKAO_MEMO_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
+KAKAO_FALLBACK_LINK = "https://github.com"
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _sentences_fit(text: str, limit: int) -> str:
+    """문장 단위로 limit 안에 들어가는 만큼만. 첫 문장도 안 들어가면 그때만 자른다."""
+    out = ""
+    for sentence in re.split(r"(?<=[.!?。])\s+", text.strip()):
+        candidate = f"{out} {sentence}".strip()
+        if len(candidate) > limit:
+            break
+        out = candidate
+    return out or _clip(text, limit)
+
+
+def _pack(required: list[str], optional: list[str], limit: int = KAKAO_TEXT_LIMIT) -> str:
+    """required 줄은 항상 넣고(넘치면 자름), optional 줄은 들어가는 만큼만 넣는다."""
+    text = _clip("\n".join(required), limit)
+    for i, line in enumerate(optional):
+        room = limit - len(text) - 1
+        if len(line) <= room:
+            text += "\n" + line
+        elif i == 0 and room >= 40:  # 첫 줄도 안 들어가면 잘라서라도 일부를 보여준다
+            text += "\n" + _clip(line, room)
+            break
+        else:
+            break
+    return text
+
+
+def build_kakao_messages(b: Briefing) -> list[str]:
+    head = [f"🌅 {title_line(b)}"]
+    if b.headline:
+        head.append(b.headline)
+    if warning := _warning(b):
+        head.append(warning)
+    if b.picks:
+        summary = f"📰 오늘의 소식 {len(b.picks)}건"
+        if b.analysis.lenses:
+            summary += f" · 🧭 사업가의 시선 {len(b.analysis.lenses)}가지"
+        head += ["", summary]
+    else:
+        head += ["", "오늘은 기준 점수를 넘은 기사가 없습니다."]
+    messages = [_clip("\n".join(head), KAKAO_TEXT_LIMIT)]
+
+    for rank, p in enumerate(b.picks, 1):
+        source = p.article.extra.get("publisher") or p.article.source
+        messages.append(_pack(
+            [f"{rank}. {p.title}", f"{source} · {published_label(p.article)} 발행"],
+            [f"• {fact}" for fact in p.facts],
+        ))
+
+    a = b.analysis
+    if a.overview:
+        prefix = f"{ANALYSIS_TITLE}\n\n큰 그림 — "
+        messages.append(prefix + _sentences_fit(a.overview, KAKAO_TEXT_LIMIT - len(prefix)))
+    for lens in a.lenses:
+        # 카카오톡엔 '이름 · 핵심 한 문장 · 질문'만. 긴 설명은 전체 브리핑에서 본다
+        ref = refs_label(lens.refs)
+        top = f"👀 {lens.name}" + (f" {ref}" if ref else "")
+        question = f"❓ {lens.question}" if lens.question else ""
+        room = KAKAO_TEXT_LIMIT - len(top) - 1 - (len(question) + 2 if question else 0)
+        body = _sentences_fit(lens.takeaway or lens.insight, max(40, room))
+        text = f"{top}\n{body}" + (f"\n\n{question}" if question else "")
+        messages.append(_clip(text, KAKAO_TEXT_LIMIT))
+    return messages
+
+
+def kakao_token_file() -> Path:
+    default = Path.home() / ".config" / "morning-brief" / "kakao_token.json"
+    return Path(os.getenv("KAKAO_TOKEN_FILE") or default).expanduser()
+
+
+def _save_kakao_tokens(data: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+
+
+def _kakao_client() -> dict:
+    params = {"client_id": os.environ["KAKAO_REST_API_KEY"]}
+    if os.getenv("KAKAO_CLIENT_SECRET"):
+        params["client_secret"] = os.environ["KAKAO_CLIENT_SECRET"]
+    return params
+
+
+def _store_kakao_response(data: dict, stored: dict, path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    if data.get("refresh_token"):  # 만료 1개월 전부터 새 토큰이 오고 이전 토큰은 폐기되므로 반드시 교체
+        stored["refresh_token"] = data["refresh_token"]
+        if data.get("refresh_token_expires_in"):
+            expires = now + timedelta(seconds=int(data["refresh_token_expires_in"]))
+            stored["refresh_token_expires_at"] = expires.isoformat(timespec="seconds")
+    stored["updated_at"] = now.isoformat(timespec="seconds")
+    _save_kakao_tokens(stored, path)
+
+
+def kakao_exchange_code(code: str, redirect_uri: str) -> Path:
+    """인가 코드를 토큰으로 바꿔 저장한다 (scripts/kakao_auth.py 에서 최초 1회)."""
+    resp = _post(KAKAO_TOKEN_URL, "Kakao 토큰 발급", data={
+        "grant_type": "authorization_code", "redirect_uri": redirect_uri, "code": code, **_kakao_client(),
+    })
+    data = resp.json()
+    if "talk_message" not in str(data.get("scope", "talk_message")):
+        raise NotifyError("'카카오톡 메시지 전송(talk_message)' 동의가 빠졌습니다. 동의항목 설정을 확인하세요.")
+    path = kakao_token_file()
+    _store_kakao_response(data, {}, path)
+    return path
+
+
+def kakao_access_token() -> str:
+    path = kakao_token_file()
+    if not path.exists():
+        raise NotifyError("카카오 토큰이 없습니다. scripts/kakao_auth.py 로 한 번 로그인하세요.")
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        resp = _post(KAKAO_TOKEN_URL, "Kakao 토큰 갱신", data={
+            "grant_type": "refresh_token", "refresh_token": stored["refresh_token"], **_kakao_client(),
+        })
+    except NotifyError as exc:
+        if "KOE322" in str(exc) or "invalid_grant" in str(exc):
+            raise NotifyError(f"{exc} — 로그인이 만료됐습니다. scripts/kakao_auth.py 로 다시 로그인하세요.") from None
+        raise
+    data = resp.json()
+    _store_kakao_response(data, stored, path)
+    return data["access_token"]
+
+
+def kakao_send_texts(texts: list[str], link: str, button: str = "전체 브리핑 보기") -> None:
+    token = kakao_access_token()
+    for text in texts:
+        template = {
+            "object_type": "text",
+            "text": text[:KAKAO_TEXT_LIMIT],
+            "link": {"web_url": link, "mobile_web_url": link},
+            "button_title": button,
+        }
+        resp = _post(
+            KAKAO_MEMO_URL, "Kakao",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"template_object": json.dumps(template, ensure_ascii=False)},
+        )
+        if resp.json().get("result_code") != 0:
+            raise NotifyError(f"Kakao 발송 실패: {resp.text[:200]}")
+        time.sleep(0.3)
+
+
+def send_kakao(b: Briefing, archive_url: str | None) -> None:
+    kakao_send_texts(build_kakao_messages(b), archive_url or KAKAO_FALLBACK_LINK)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +442,8 @@ def configured_channels() -> list[tuple[str, Callable[[Briefing, str | None], No
         channels.append(("discord", send_discord))
     if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
         channels.append(("telegram", send_telegram))
+    if os.getenv("KAKAO_REST_API_KEY"):
+        channels.append(("kakao", send_kakao))
     return channels
 
 
@@ -281,7 +451,7 @@ def notify(briefing: Briefing, archive_url: str | None = None) -> dict[str, bool
     """설정된 모든 채널로 발송하고 채널별 성공 여부를 돌려준다. 한 채널 실패가 다른 채널을 막지 않는다."""
     channels = configured_channels()
     if not channels:
-        log.warning("설정된 메신저가 없어 발송을 건너뜁니다 (SLACK_WEBHOOK_URL / DISCORD_WEBHOOK_URL / TELEGRAM_*)")
+        log.warning("설정된 메신저가 없어 발송을 건너뜁니다 (SLACK_WEBHOOK_URL / DISCORD_WEBHOOK_URL / TELEGRAM_* / KAKAO_*)")
         return {}
     results: dict[str, bool] = {}
     for name, send in channels:

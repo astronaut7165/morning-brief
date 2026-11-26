@@ -7,11 +7,13 @@ from pathlib import Path
 
 import yaml
 
-from analyzer import KST, Analysis, Briefing, Insight, Pick
+from analyzer import KST, Analysis, Briefing, Pick
 from collector import Article, CollectResult
 
 WEEKDAYS = "월화수목금토일"
 FOLD_AT_OR_BELOW = 2  # 이 점수 이하 후보는 접어서 보여준다
+ANALYSIS_TITLE = "🧭 사업가의 시선"
+ANALYSIS_SUBTITLE = "오늘 소식을 어떤 눈으로 볼까"
 _TAG_UNSAFE_RE = re.compile(r"[^\w/-]+", re.UNICODE)
 
 
@@ -89,22 +91,18 @@ def _render_pick(rank: int, pick: Pick) -> list[str]:
     return lines
 
 
-def _render_insights(title: str, items: list[Insight]) -> list[str]:
-    if not items:
-        return []
-    lines = [f"### {title}", ""]
-    for it in items:
-        ref = refs_label(it.refs)
-        lines.append(f"- {it.text}" + (f" {ref}" if ref else ""))
-    return lines + [""]
-
-
 def _render_analysis(analysis: Analysis) -> list[str]:
-    lines = ["## 🧭 종합 분석 — 사업 기회·실무 적용 관점", ""]
+    lines = [f"## {ANALYSIS_TITLE} — {ANALYSIS_SUBTITLE}", ""]
     if analysis.overview:
-        lines += [analysis.overview, ""]
-    lines += _render_insights("💡 사업 기회", analysis.opportunities)
-    lines += _render_insights("🛠 이번 주 실무 적용", analysis.actions)
+        lines += [f"**큰 그림** — {analysis.overview}", ""]
+    for lens in analysis.lenses:
+        ref = refs_label(lens.refs)
+        lines += [f"### 👀 {lens.name}" + (f" {ref}" if ref else ""), ""]
+        if lens.takeaway:
+            lines += [f"**{lens.takeaway}**", ""]
+        lines += [lens.insight, ""]
+        if lens.question:
+            lines += [f"> ❓ {lens.question}", ""]
     return lines
 
 

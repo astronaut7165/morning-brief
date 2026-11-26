@@ -1,13 +1,13 @@
 # 🌅 Morning Brief
 
-매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업 기회·실무 적용 관점의 종합 분석**을 붙여 메신저로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
+매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업가의 시선** — 이 소식들을 어떤 눈으로 봐야 하는지 — 을 붙여 메신저(카카오톡 포함)로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
 
 ```
 내 Mac (launchd, 매일 07:00)
   └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거
-  └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고, 상위 5~7건의 사실 정리 + 종합 분석
+  └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고, 상위 5~7건의 사실 정리 + 사업가의 시선
   └─ archiver   vault/raw/YYYY/MM/YYYY-MM-DD.md 로 저장
-  └─ notifier   Slack / Discord / Telegram 으로 발송
+  └─ notifier   카카오톡 / Slack / Discord / Telegram 으로 발송
   └─ git commit & push
 ```
 
@@ -21,10 +21,11 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 ├── config/sources.yaml                   # 수집 소스 · 독자 프로필 · 산업군 트래킹 설정
 ├── scripts/
 │   ├── install_launchd.sh                # 매일 아침 자동 실행 등록 (macOS)
+│   ├── kakao_auth.py                     # 카카오톡 '나에게 보내기' 최초 로그인
 │   └── run_local.sh                      # pull → 브리핑 → 커밋·push
 ├── src/
 │   ├── collector.py                      # 소스별 수집, 중복 제거
-│   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 종합 분석
+│   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 사업가의 시선
 │   ├── notifier.py                       # 메신저 발송
 │   ├── archiver.py                       # 마크다운 생성
 │   └── main.py                           # 전체 파이프라인 실행
@@ -56,6 +57,7 @@ tail -f ~/Library/Logs/morning-brief.log
 
 | `.env` 항목 | 설명 |
 |---|---|
+| `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET` | 카카오톡 '나와의 채팅'으로 받기 — [아래](#카카오톡으로-받기) 설정 후 로그인 1회 |
 | `DISCORD_WEBHOOK_URL` | 채널 설정 → 연동 → 웹후크 → URL 복사 (가장 간단) |
 | `SLACK_WEBHOOK_URL` | api.slack.com/apps → Incoming Webhooks (Mattermost 호환) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | @BotFather 로 봇 생성, `getUpdates` 로 chat id 확인 |
@@ -66,6 +68,25 @@ tail -f ~/Library/Logs/morning-brief.log
 - 해제: `bash scripts/install_launchd.sh --uninstall`
 - 그 시각에 Mac이 **잠자기** 중이면 깨어날 때 실행되고, **꺼져** 있으면 그날은 건너뜁니다. 매일 자동으로 깨우려면 `sudo pmset repeat wakeorpoweron MTWRFSU 06:55:00`.
 - 분석은 `claude -p` 를 도구·MCP·개인 설정 없이 호출하며, 로그인된 구독의 사용량에서 차감됩니다. 환경에 `ANTHROPIC_API_KEY` 가 있어도 claude 에는 넘기지 않아 API 과금으로 바뀌지 않습니다.
+
+### 카카오톡으로 받기
+
+카카오 공식 API의 '나에게 보내기'로 내 카카오톡 **나와의 채팅**에 브리핑이 옵니다. 개인 용도라 사업자 등록·검수가 필요 없습니다.
+
+1. [Kakao Developers](https://developers.kakao.com) 에 로그인해 앱을 하나 만듭니다.
+2. 앱 키의 **REST API 키**를 `.env` 의 `KAKAO_REST_API_KEY` 에, **클라이언트 시크릿**(기본으로 켜져 있음)을 `KAKAO_CLIENT_SECRET` 에 넣습니다.
+3. **카카오 로그인**을 켜고 Redirect URI 에 `http://localhost:8765/callback` 을 등록합니다.
+4. **동의항목**에서 '카카오톡 메시지 전송(talk_message)'을 사용하도록 설정합니다.
+5. **제품 링크 관리 > 웹 도메인**에 `https://github.com` 을 등록합니다. 메시지 버튼('전체 브리핑 보기')이 GitHub 의 아카이브로 연결되는데, 등록된 도메인만 열립니다.
+6. 로그인을 한 번 합니다. 브라우저에서 로그인·동의를 마치면 카카오톡으로 확인 메시지가 옵니다.
+   ```bash
+   .venv/bin/python scripts/kakao_auth.py
+   ```
+
+- 말풍선 하나가 200자로 제한돼 있어 **헤더 → 기사별 → 사업가의 시선별**로 나눠 하루 10개 안팎의 말풍선으로 옵니다. 잘린 내용과 원문 링크는 '전체 브리핑 보기'에서 볼 수 있습니다.
+- 토큰은 저장소 밖 `~/.config/morning-brief/kakao_token.json` 에 보관되고 매일 실행할 때 자동으로 갱신됩니다. 두 달 넘게 실행하지 않아 만료되면 6번만 다시 하면 됩니다.
+- localhost 리다이렉트가 막히면 Redirect URI 를 다른 주소로 등록하고 `.env` 의 `KAKAO_REDIRECT_URI` 를 같게 맞추세요. 로그인 후 이동한 페이지의 주소를 붙여 넣으라는 안내가 나옵니다.
+- 갱신되는 토큰을 저장해야 해서 카카오톡 발송은 로컬 실행에서만 지원합니다(GitHub Actions 대안에서는 불가).
 
 ### 수동 실행
 
@@ -78,7 +99,7 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
 
 ## 설정 바꾸기 — `config/sources.yaml`
 
-- **관점 조정 (가장 중요)**: `reader_profile` 을 내 상황·관심 산업·고민 중인 사업에 맞게 구체적으로 쓰면 점수와 마지막 종합 분석(사업 기회·실무 적용)이 날카로워집니다.
+- **관점 조정 (가장 중요)**: `reader_profile` 을 내 상황·관심 산업·고민 중인 사업에 맞게 구체적으로 쓰면 점수와 마지막 '사업가의 시선'이 내 상황에 맞춰집니다.
 - **소스 추가**: `sources` 에 항목을 하나 추가합니다. 지원 type은 `rss`, `google_news`(키워드 검색), `hackernews` 입니다.
   ```yaml
   - name: 내가 보는 블로그
@@ -92,7 +113,7 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
 
 ## Vault 활용
 
-- `vault/raw/` 는 자동화만 씁니다. 매일 오늘의 소식(기사별 사실·발행일·관련 보도), 종합 분석(흐름·사업 기회·이번 주 실무 적용), 전체 후보 목록(점수순, 2점 이하는 접힘), 소스별 수집 현황이 남습니다.
+- `vault/raw/` 는 자동화만 씁니다. 매일 오늘의 소식(기사별 사실·발행일·관련 보도), 사업가의 시선(큰 그림, 오늘 기사에 맞는 시선 3~4개와 스스로 던져볼 질문), 전체 후보 목록(점수순, 2점 이하는 접힘), 소스별 수집 현황이 남습니다.
 - `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요. 자동 커밋은 `vault/raw` 와 `state` 만 올리므로 작성 중인 노트가 섞여 올라가지 않습니다.
 - 이 폴더를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다. 메신저 메시지의 '전체 브리핑 보기' 링크는 push 된 GitHub 파일로 연결됩니다.
 

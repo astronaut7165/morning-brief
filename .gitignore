@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+kakao_token.json
+*.token.json
 
 # python
 __pycache__/

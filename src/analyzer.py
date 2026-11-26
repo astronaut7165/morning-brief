@@ -1,5 +1,5 @@
 """LLM 분석: 기사를 1~5점으로 매기고, 상위 5~7건은 사실만 정리한 뒤
-마지막에 '사업 기회 · 실무 적용' 관점의 종합 분석을 붙인다.
+마지막에 '사업가의 시선' — 이 소식들을 어떤 눈으로 봐야 하는지 — 를 붙인다.
 
 지원 provider (환경변수 LLM_PROVIDER, 비우면 API 키 → 로컬 claude CLI 순으로 자동 감지)
   claude-code  로컬 Claude Code CLI(`claude -p`) — 구독 로그인 사용, API 키 불필요. 기본 모델 opus
@@ -60,20 +60,23 @@ class Pick:
 
 
 @dataclass
-class Insight:
-    text: str
+class Lens:
+    """사업가가 뉴스를 볼 때 쓰는 시선 하나 (예: 돈의 흐름, 가치사슬)."""
+    name: str
+    insight: str  # 이 시선으로 오늘 기사를 보면 무엇이 보이는가
+    question: str = ""  # 다른 뉴스에도 던져볼 질문
+    takeaway: str = ""  # 핵심 한 문장 (카카오톡처럼 짧은 채널에 그대로 쓴다)
     refs: list[int] = field(default_factory=list)  # 근거가 된 Top Pick 순번 (1부터)
 
 
 @dataclass
 class Analysis:
-    """Top Picks 전체를 독자 관점에서 엮은 종합 분석."""
+    """Top Picks 전체를 사업가의 눈으로 엮은 분석."""
     overview: str = ""
-    opportunities: list[Insight] = field(default_factory=list)
-    actions: list[Insight] = field(default_factory=list)
+    lenses: list[Lens] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.overview or self.opportunities or self.actions)
+        return bool(self.overview or self.lenses)
 
 
 @dataclass
@@ -98,7 +101,7 @@ class Briefing:
 # ─────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """\
 당신은 기술·비즈니스 동향을 걸러내 아침 브리핑을 만드는 시니어 애널리스트입니다.
-브리핑은 두 부분으로 나뉩니다. 앞부분은 기사별 '사실'만, 마지막은 독자 관점의 '종합 분석'입니다. 둘을 섞지 않습니다.
+브리핑은 두 부분으로 나뉩니다. 앞부분은 기사별 '사실'만, 마지막은 '사업가의 시선'입니다. 둘을 섞지 않습니다.
 
 [독자 프로필]
 {reader_profile}
@@ -115,14 +118,22 @@ SYSTEM_PROMPT = """\
 [작업]
 1. scores: 모든 기사 id에 점수를 매긴다. 빠뜨리지 않는다.
 2. 같은 사건을 다룬 기사는 하나로 묶는다. 같은 발표·같은 회사의 같은 소식만 해당한다. 주제만 비슷한 다른 회사·다른 사건은 묶지 않는다(그런 연결은 종합 분석에서 다룬다). 정보가 가장 풍부한 기사를 대표로 고르고 나머지 id는 related_ids에 넣는다.
-3. picks: {min_score}점 이상인 기사 가운데 중요도 순으로 최대 {top_n}건을 고른다. 주제가 한쪽으로 쏠리지 않게 한다. 각 항목은 한국어로 쓴다.
+3. picks: {min_score}점 이상인 기사 가운데 중요도 순으로 최대 {top_n}건을 고른다. 독자의 시야가 넓어지도록 서로 다른 산업·영역에서 고르고, 한 분야(예: AI)에 쏠리지 않게 한다. 각 항목은 한국어로 쓴다.
    - title: 핵심이 드러나도록 다듬은 한국어 제목 (40자 이내)
    - category: AI, 스타트업·투자, 빅테크, 개발·인프라, 제품·서비스, 정책·규제, 산업 중 가장 가까운 것 하나
    - facts: 기사에서 확인되는 사실 2~4개. 각 1문장으로 누가·언제·무엇을·얼마나를 담는다. 의견·전망·평가·권고는 쓰지 않는다.
-4. analysis: 고른 기사 전체를 독자 프로필 관점에서 엮은 종합 분석.
-   - overview: 오늘 소식들을 꿰는 흐름과 독자에게 갖는 의미 2~3문장
-   - opportunities: 사업 기회 또는 위협 2~4개. 누구에게 어떤 기회·위협인지 1~2문장, 근거가 된 기사 id를 pick_ids에
-   - actions: 독자가 이번 주에 해볼 수 있는 구체적 행동 2~4개. 1~2문장, 근거 기사 id를 pick_ids에
+4. analysis: 사업가의 시선. 독자가 사업가의 눈을 기를 수 있도록, 고른 기사들을 '어떤 시선으로 바라봐야 하는지' 보여준다.
+   정답이나 할 일 목록이 아니라 보는 법을 알려주는 것이 목적이다. 전문용어는 풀어서 쓴다.
+   - overview: 한 발 물러서서 본 오늘의 큰 그림 2~3문장. 개별 사건 너머에서 무엇이 바뀌고 있는지
+   - lenses: 오늘 기사에 가장 잘 맞는 시선 3~4개. 매번 같은 시선을 반복하지 말고 오늘 소식에 맞는 것을 고른다.
+     예) 돈의 흐름(누가 돈을 쓰고 누가 버는가), 가치사슬(어느 단계로 이익이 옮겨가는가), 규제·정책이 만드는 시장,
+     플랫폼 의존과 협상력, 비용 구조의 변화, 수요의 신호(누가 왜 돈을 내는가), 2차 효과(이 변화가 다음에 무엇을 바꾸나), 해자와 진입장벽.
+     예시에 없는 시선도 좋다.
+     - name: 시선의 이름 (15자 이내, 예: '돈의 흐름 따라가기')
+     - takeaway: 이 시선으로 본 오늘의 핵심을 한 문장으로 (70자 이내). 이것만 읽어도 요점이 전해지게
+     - insight: 이 시선으로 오늘 기사를 보면 무엇이 보이는지 2~3문장. 기사 속 사실을 구체적으로 짚고, 여러 기사를 엮을수록 좋다
+     - question: 독자가 앞으로 다른 뉴스를 볼 때도 던질 수 있는 질문 1개
+     - pick_ids: 근거가 된 기사 id
 5. headline: 오늘 가장 중요한 소식들을 사실 그대로 요약한 한 줄 (60자 이내, 해석 없이)
 
 [날짜]
@@ -139,19 +150,25 @@ SYSTEM_PROMPT = """\
 - 아래 JSON 형식으로만 응답한다. 마크다운이나 설명을 덧붙이지 않는다.
 {{"scores": [{{"id": 0, "score": 3}}, ...],
  "picks": [{{"id": 0, "score": 5, "category": "...", "title": "...", "facts": ["...", "..."], "related_ids": []}}],
- "analysis": {{"overview": "...", "opportunities": [{{"text": "...", "pick_ids": [0]}}], "actions": [{{"text": "...", "pick_ids": [0]}}]}},
+ "analysis": {{"overview": "...", "lenses": [{{"name": "...", "takeaway": "...", "insight": "...", "question": "...", "pick_ids": [0]}}]}},
  "headline": "..."}}
 """
 
 _SCORE = {"type": "integer", "enum": [1, 2, 3, 4, 5]}
 _STRINGS = {"type": "array", "items": {"type": "string"}}
 _IDS = {"type": "array", "items": {"type": "integer"}}
-_INSIGHTS = {
+_LENSES = {
     "type": "array",
     "items": {
         "type": "object",
-        "properties": {"text": {"type": "string"}, "pick_ids": _IDS},
-        "required": ["text", "pick_ids"],
+        "properties": {
+            "name": {"type": "string"},
+            "takeaway": {"type": "string"},
+            "insight": {"type": "string"},
+            "question": {"type": "string"},
+            "pick_ids": _IDS,
+        },
+        "required": ["name", "takeaway", "insight", "question", "pick_ids"],
         "additionalProperties": False,
     },
 }
@@ -185,12 +202,8 @@ BRIEFING_SCHEMA: dict = {
         },
         "analysis": {
             "type": "object",
-            "properties": {
-                "overview": {"type": "string"},
-                "opportunities": _INSIGHTS,
-                "actions": _INSIGHTS,
-            },
-            "required": ["overview", "opportunities", "actions"],
+            "properties": {"overview": {"type": "string"}, "lenses": _LENSES},
+            "required": ["overview", "lenses"],
             "additionalProperties": False,
         },
         "headline": {"type": "string"},
@@ -508,24 +521,23 @@ def briefing_from_llm(
         for art in [pick.article, *pick.related]:
             rank_of.setdefault(id(art), rank)
 
-    def insights(items) -> list[Insight]:
-        out = []
-        for it in items if isinstance(items, list) else []:
-            if not isinstance(it, dict) or not str(it.get("text") or "").strip():
-                continue
-            refs = []
-            for j in it.get("pick_ids") or []:
-                if isinstance(j, int) and 0 <= j < n and (r := rank_of.get(id(candidates[j]))) and r not in refs:
-                    refs.append(r)
-            out.append(Insight(text=str(it["text"]).strip(), refs=sorted(refs)))
-        return out
-
     raw = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
-    analysis = Analysis(
-        overview=str(raw.get("overview") or "").strip(),
-        opportunities=insights(raw.get("opportunities")),
-        actions=insights(raw.get("actions")),
-    )
+    lenses: list[Lens] = []
+    for it in raw.get("lenses") if isinstance(raw.get("lenses"), list) else []:
+        if not isinstance(it, dict):
+            continue
+        name, insight = str(it.get("name") or "").strip(), str(it.get("insight") or "").strip()
+        if not name or not insight:
+            continue
+        refs: list[int] = []
+        for j in it.get("pick_ids") or []:
+            if isinstance(j, int) and 0 <= j < n and (r := rank_of.get(id(candidates[j]))) and r not in refs:
+                refs.append(r)
+        lenses.append(Lens(
+            name=name, insight=insight, question=str(it.get("question") or "").strip(),
+            takeaway=str(it.get("takeaway") or "").strip(), refs=sorted(refs),
+        ))
+    analysis = Analysis(overview=str(raw.get("overview") or "").strip(), lenses=lenses)
 
     return Briefing(
         day=day,
