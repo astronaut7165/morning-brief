@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,14 +47,28 @@ def load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 
-def archive_url(path: Path) -> str | None:
-    """GitHub Actions 에서 실행 중이면 아카이브 파일의 웹 주소를 만든다."""
-    repo = os.getenv("GITHUB_REPOSITORY")
-    if not repo:
+def repo_web_url() -> str | None:
+    """GitHub Actions 환경변수, 없으면 로컬 git remote(origin)에서 저장소 웹 주소를 찾는다."""
+    if repo := os.getenv("GITHUB_REPOSITORY"):
+        return f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{repo}"
+    try:
+        remote = subprocess.run(
+            ["git", "-C", str(ROOT), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
         return None
-    server = os.getenv("GITHUB_SERVER_URL", "https://github.com")
+    match = re.match(r"^(?:https://github\.com/|git@github\.com:)([\w.-]+/[\w.-]+?)(?:\.git)?$", remote)
+    return f"https://github.com/{match.group(1)}" if match else None
+
+
+def archive_url(path: Path) -> str | None:
+    """메신저에 넣을 아카이브 파일의 GitHub 주소 (push 된 뒤에 열림)."""
+    base = repo_web_url()
+    if not base:
+        return None
     branch = os.getenv("GITHUB_REF_NAME") or "main"
-    return f"{server}/{repo}/blob/{quote(branch)}/{quote(path.relative_to(ROOT).as_posix())}"
+    return f"{base}/blob/{quote(branch)}/{quote(path.relative_to(ROOT).as_posix())}"
 
 
 def main(argv: list[str] | None = None) -> int:

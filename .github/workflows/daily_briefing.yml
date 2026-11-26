@@ -1,9 +1,11 @@
 name: Daily Briefing
 
+# 기본 운영은 로컬 Mac(launchd + Claude Code 구독)입니다. 이 워크플로는 API 키로 돌리는 대안·수동 실행용입니다.
+# GitHub 에서 매일 돌리려면 아래 schedule 주석을 풀고 로컬 launchd 는 해제하세요 (중복 실행 방지).
 on:
-  schedule:
-    # 매일 07:00 KST (= 전날 22:00 UTC). GitHub 스케줄러 특성상 수~수십 분 늦게 시작될 수 있습니다.
-    - cron: "0 22 * * *"
+  # schedule:
+  #   # 매일 07:00 KST (= 전날 22:00 UTC). GitHub 스케줄러 특성상 수~수십 분 늦게 시작될 수 있습니다.
+  #   - cron: "0 22 * * *"
   workflow_dispatch:
     inputs:
       notify:

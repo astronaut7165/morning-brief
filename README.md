@@ -1,22 +1,27 @@
 # 🌅 Morning Brief
 
-매일 아침 기술·비즈니스 동향을 자동으로 모으고, LLM으로 **사업 기회와 실무 적용 관점**에서 골라 요약해 메신저로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
+매일 아침 기술·비즈니스 동향을 자동으로 모으고, Claude로 **사업 기회와 실무 적용 관점**에서 골라 요약해 메신저로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
 
 ```
-GitHub Actions (매일 07:00 KST)
+내 Mac (launchd, 매일 07:00)
   └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거
-  └─ analyzer   LLM이 모든 기사를 1~5점으로 매기고 상위 5~7건을 요약
+  └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고 상위 5~7건 요약
   └─ archiver   vault/raw/YYYY/MM/YYYY-MM-DD.md 로 저장
   └─ notifier   Slack / Discord / Telegram 으로 발송
   └─ git commit & push
 ```
 
+API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석합니다. 원하면 GitHub Actions + API 키 방식으로도 돌릴 수 있습니다([아래](#대안-github-actions--api-키)).
+
 ## 디렉토리 구조
 
 ```text
 .
-├── .github/workflows/daily_briefing.yml  # 매일 아침 실행 + 결과 커밋
+├── .github/workflows/daily_briefing.yml  # (대안) GitHub Actions 실행 — 기본은 수동 실행만
 ├── config/sources.yaml                   # 수집 소스 · 독자 프로필 · 산업군 트래킹 설정
+├── scripts/
+│   ├── install_launchd.sh                # 매일 아침 자동 실행 등록 (macOS)
+│   └── run_local.sh                      # pull → 브리핑 → 커밋·push
 ├── src/
 │   ├── collector.py                      # 소스별 수집, 중복 제거
 │   ├── analyzer.py                       # LLM 점수화(1~5) · 상위 기사 요약
@@ -31,45 +36,49 @@ GitHub Actions (매일 07:00 KST)
 └── .env.example
 ```
 
-## 시작하기
+## 시작하기 (로컬 Mac)
 
-### 1. GitHub에 비밀값 등록
-
-저장소 **Settings → Secrets and variables → Actions** 에서 등록합니다. 코드에는 어떤 키도 들어 있지 않습니다.
-
-| 종류 | 이름 | 설명 |
-|---|---|---|
-| Secret | `ANTHROPIC_API_KEY` | 기본 LLM. OpenAI·Gemini를 쓰려면 `OPENAI_API_KEY` / `GEMINI_API_KEY` |
-| Secret | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook (Mattermost 호환) |
-| Secret | `DISCORD_WEBHOOK_URL` | Discord 채널 웹훅 |
-| Secret | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Telegram 봇 |
-| Variable (선택) | `LLM_PROVIDER` | `anthropic` \| `openai` \| `gemini`. 비우면 등록된 키로 자동 선택 |
-| Variable (선택) | `LLM_MODEL` | 모델 변경. 기본값은 `claude-opus-5-5` |
-| Variable (선택) | `LLM_EFFORT` | Anthropic 추론 강도 `low` \| `medium` \| `high` (기본 `medium`) |
-
-메신저는 하나 이상 등록하면 되고, 여러 개를 등록하면 모두에게 보냅니다.
-
-### 2. 첫 실행
-
-**Actions → Daily Briefing → Run workflow** 로 바로 실행해 볼 수 있습니다. `notify` 체크를 끄면 메신저 없이 아카이브만 남깁니다. 이후에는 매일 07:00 KST에 자동으로 돕니다.
-
-> GitHub 스케줄러는 정각 실행이 몰려 수~수십 분 늦을 수 있습니다. 공개 저장소의 스케줄은 60일 동안 커밋이 없으면 꺼지는데, 이 워크플로는 매일 커밋하므로 꺼지지 않습니다.
-
-### 3. 로컬 실행 (선택)
+**준비물**: [Claude Code](https://code.claude.com)가 설치되어 있고 `claude` 로 한 번 로그인한 상태, Python 3.11+.
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # 값 채우기
+git clone https://github.com/astronaut7165/morning-brief.git && cd morning-brief
 
-python src/main.py --dry-run --no-llm   # 수집만 점검 (파일·발송 없음, 비용 없음)
-python src/main.py --dry-run            # LLM 분석 결과를 화면에 출력
-python src/main.py --no-notify          # vault 에 저장만
-python src/main.py                      # 전체 실행
+# 1) 메신저 설정 — .env 에 웹훅 하나 이상 입력 (.env 는 git에 올라가지 않습니다)
+cp .env.example .env
+
+# 2) 매일 07:00 자동 실행 등록 (가상환경 생성 + launchd 등록)
+bash scripts/install_launchd.sh
+
+# 3) 지금 한 번 실행해 보기
+launchctl kickstart gui/$(id -u)/com.morning-brief.daily
+tail -f ~/Library/Logs/morning-brief.log
+```
+
+| `.env` 항목 | 설명 |
+|---|---|
+| `DISCORD_WEBHOOK_URL` | 채널 설정 → 연동 → 웹후크 → URL 복사 (가장 간단) |
+| `SLACK_WEBHOOK_URL` | api.slack.com/apps → Incoming Webhooks (Mattermost 호환) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | @BotFather 로 봇 생성, `getUpdates` 로 chat id 확인 |
+| `LLM_MODEL` (선택) | 기본 `opus`. 구독 사용량을 아끼려면 `sonnet` |
+| `LLM_EFFORT` (선택) | `low` \| `medium` \| `high` (기본 `medium`) |
+
+- 실행 시간 변경: `BRIEF_HOUR=6 BRIEF_MINUTE=30 bash scripts/install_launchd.sh`
+- 해제: `bash scripts/install_launchd.sh --uninstall`
+- 그 시각에 Mac이 **잠자기** 중이면 깨어날 때 실행되고, **꺼져** 있으면 그날은 건너뜁니다. 매일 자동으로 깨우려면 `sudo pmset repeat wakeorpoweron MTWRFSU 06:55:00`.
+- 분석은 `claude -p` 를 도구·MCP·개인 설정 없이 호출하며, 로그인된 구독의 사용량에서 차감됩니다. 환경에 `ANTHROPIC_API_KEY` 가 있어도 claude 에는 넘기지 않아 API 과금으로 바뀌지 않습니다.
+
+### 수동 실행
+
+```bash
+bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브리핑 → 커밋·push)
+.venv/bin/python src/main.py --dry-run --no-llm   # 수집만 점검 (파일·발송 없음)
+.venv/bin/python src/main.py --dry-run            # 분석 결과를 화면에만 출력
+.venv/bin/python src/main.py --no-notify          # vault 에 저장만
 ```
 
 ## 설정 바꾸기 — `config/sources.yaml`
 
+- **관점 조정 (가장 중요)**: `reader_profile` 을 내 상황·관심 산업·고민 중인 사업에 맞게 구체적으로 쓰면 점수와 '실무 적용' 제안이 날카로워집니다.
 - **소스 추가**: `sources` 에 항목을 하나 추가합니다. 지원 type은 `rss`, `google_news`(키워드 검색), `hackernews` 입니다.
   ```yaml
   - name: 내가 보는 블로그
@@ -78,20 +87,26 @@ python src/main.py                      # 전체 실행
     tags: [ai]
   ```
 - **산업군 트래킹**: `tracks` 아래 항목의 `enabled: true` 로 켭니다. 해당 소스가 수집에 합류하고, `description` 이 LLM의 '중점 관찰 분야'로 들어가 관련 기사에 가중치가 붙습니다. 새 산업군은 예시 블록을 복사해 키워드만 바꾸면 됩니다.
-- **관점 조정**: `reader_profile` 을 내 상황에 맞게 고치면 점수 기준이 바뀝니다.
-- **분량·비용**: `settings` 의 `top_n`(브리핑 건수), `min_score`, `max_candidates`(LLM에 넘길 후보 수 상한).
+- **분량**: `settings` 의 `top_n`(브리핑 건수), `min_score`, `max_candidates`(LLM에 넘길 후보 수 상한).
 - **새 수집 방식**: `src/collector.py` 에 `@fetcher("새타입")` 함수를 하나 추가하면 yaml에서 바로 쓸 수 있습니다.
 
 ## Vault 활용
 
 - `vault/raw/` 는 자동화만 씁니다. 매일 Top Picks(요약·사업 기회·실무 적용)와 전체 후보 목록(점수순), 소스별 수집 현황이 남습니다.
-- `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요.
-- YAML frontmatter와 태그가 붙어 있어 저장소를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다.
+- `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요. 자동 커밋은 `vault/raw` 와 `state` 만 올리므로 작성 중인 노트가 섞여 올라가지 않습니다.
+- 이 폴더를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다. 메신저 메시지의 '전체 브리핑 보기' 링크는 push 된 GitHub 파일로 연결됩니다.
 
 ## 동작 메모
 
-- **중복 제거**: URL 정규화(추적 파라미터 제거)와 제목 유사도로 같은 기사를 합치고, 여러 매체가 함께 보도한 기사는 '동시 보도 N곳'으로 표시해 LLM 점수에 반영합니다. 전날까지 브리핑에 올린 기사는 `state/seen.json` 으로 걸러내며, 같은 날 다시 실행하면 같은 결과가 나옵니다.
-- **장애 대응**: 소스 하나가 실패해도 나머지로 진행하고, 실패한 소스는 아카이브의 '수집 현황'에 표시됩니다. LLM 호출이 실패하면 동시 보도 수·HN 점수·최신순으로 고른 기본 브리핑을 경고와 함께 보내고, 워크플로는 실패로 표시되어 GitHub 알림 메일이 옵니다.
-- **Anthropic 호출**: 구조화 출력(JSON 스키마)으로 응답 형식을 강제하고, 정책상 거절이 나면 서버가 기본 대체 모델로 다시 실행하도록 `fallbacks: "default"` 를 켜 두었습니다.
-- **비용**: 기본 설정(후보 150건, `claude-opus-5-5`, effort `medium`)으로 하루 한 번 호출하면 입력 약 2만 토큰 수준입니다. 비용을 줄이려면 `LLM_MODEL=claude-sonnet-5-5` 로 바꾸거나 `max_candidates` 를 낮추세요.
-- OpenAI·Gemini 기본 모델명(`gpt-5-mini`, `gemini-2.5-flash`)은 바뀔 수 있으니 실제 쓰는 모델을 `LLM_MODEL` 로 지정하는 편이 안전합니다. 이 경우 `requirements.txt` 에서 해당 SDK 주석을 풀어 주세요.
+- **중복 제거**: URL 정규화(추적 파라미터 제거)와 제목 유사도로 같은 기사를 합치고, 여러 매체가 함께 보도한 기사는 '동시 보도 N곳'으로 표시해 점수에 반영합니다. 전날까지 브리핑에 올린 기사는 `state/seen.json` 으로 걸러내며, 같은 날 다시 실행하면 같은 결과가 나옵니다.
+- **장애 대응**: 소스 하나가 실패해도 나머지로 진행하고, 실패한 소스는 아카이브의 '수집 현황'에 표시됩니다. LLM 분석이 실패하면(로그인 만료 등) 동시 보도 수·HN 점수·최신순으로 고른 기본 브리핑을 경고와 함께 보냅니다. 원인은 `~/Library/Logs/morning-brief.log` 에 남습니다.
+
+## 대안: GitHub Actions + API 키
+
+Mac이 꺼져 있어도 돌아야 한다면 GitHub에서 실행할 수 있습니다. 이 경우 Claude 구독이 아니라 API 키로 과금됩니다.
+
+1. 저장소 **Settings → Secrets and variables → Actions** 에 `ANTHROPIC_API_KEY`(또는 `OPENAI_API_KEY` / `GEMINI_API_KEY`)와 메신저 값을 Secret 으로 등록합니다. 모델은 Variable `LLM_MODEL` 로 바꿀 수 있습니다(기본 `claude-opus-5-5`).
+2. `.github/workflows/daily_briefing.yml` 의 `schedule` 주석을 풀고, 로컬 launchd 는 해제합니다(중복 실행 방지).
+3. **Actions → Daily Briefing → Run workflow** 로 수동 실행도 됩니다.
+
+OpenAI·Gemini를 쓰려면 `requirements.txt` 에서 해당 SDK 주석을 풀고 `LLM_PROVIDER`·`LLM_MODEL` 을 지정하세요.

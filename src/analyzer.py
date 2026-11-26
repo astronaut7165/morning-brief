@@ -1,9 +1,10 @@
 """LLM 분석: '사업 기회 · 실무 적용' 관점으로 기사를 1~5점으로 매기고 상위 5~7건을 요약한다.
 
-지원 provider (환경변수 LLM_PROVIDER, 비우면 설정된 API 키로 자동 감지)
-  anthropic  ANTHROPIC_API_KEY   기본 모델 claude-opus-5-5
-  openai     OPENAI_API_KEY      기본 모델 gpt-5-mini
-  gemini     GEMINI_API_KEY      기본 모델 gemini-2.5-flash
+지원 provider (환경변수 LLM_PROVIDER, 비우면 API 키 → 로컬 claude CLI 순으로 자동 감지)
+  claude-code  로컬 Claude Code CLI(`claude -p`) — 구독 로그인 사용, API 키 불필요. 기본 모델 opus
+  anthropic    ANTHROPIC_API_KEY   기본 모델 claude-opus-5-5
+  openai       OPENAI_API_KEY      기본 모델 gpt-5-mini
+  gemini       GEMINI_API_KEY      기본 모델 gemini-2.5-flash
 LLM_MODEL 로 모델을 바꿀 수 있다. LLM 호출이 실패하면 휴리스틱 정렬로 대체해 브리핑은 항상 나간다.
 """
 
@@ -14,6 +15,8 @@ import logging
 import math
 import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
@@ -30,10 +33,12 @@ API_KEY_ENV = {
     "gemini": "GEMINI_API_KEY",
 }
 DEFAULT_MODELS = {
+    "claude-code": "opus",
     "anthropic": "claude-opus-5-5",
     "openai": "gpt-5-mini",
     "gemini": "gemini-2.5-flash",
 }
+CLAUDE_CODE_TIMEOUT = 900  # 초
 
 
 class LLMError(RuntimeError):
@@ -194,16 +199,27 @@ def build_user_prompt(candidates: list[Article], now: datetime) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider 호출
 # ─────────────────────────────────────────────────────────────────────────────
+def claude_bin() -> str | None:
+    return os.getenv("CLAUDE_BIN") or shutil.which("claude")
+
+
 def resolve_provider() -> tuple[str, str, str]:
     provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
     if not provider:
         provider = next((p for p, env in API_KEY_ENV.items() if os.getenv(env)), "")
+        if not provider and claude_bin():
+            provider = "claude-code"
         if not provider:
             raise LLMError(
-                "LLM API 키가 없습니다. ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 중 하나를 설정하세요."
+                "사용할 LLM이 없습니다. 로컬에 Claude Code(claude)를 설치·로그인하거나 "
+                "ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY 중 하나를 설정하세요."
             )
+    if provider == "claude-code":
+        if not claude_bin():
+            raise LLMError("LLM_PROVIDER=claude-code 인데 claude CLI를 찾을 수 없습니다 (PATH 또는 CLAUDE_BIN 확인).")
+        return provider, (os.getenv("LLM_MODEL") or "").strip() or DEFAULT_MODELS[provider], ""
     if provider not in API_KEY_ENV:
-        raise LLMError(f"알 수 없는 LLM_PROVIDER: {provider} (anthropic | openai | gemini)")
+        raise LLMError(f"알 수 없는 LLM_PROVIDER: {provider} (claude-code | anthropic | openai | gemini)")
     key = os.getenv(API_KEY_ENV[provider])
     if not key:
         raise LLMError(f"LLM_PROVIDER={provider} 인데 {API_KEY_ENV[provider]} 가 비어 있습니다.")
@@ -294,7 +310,48 @@ def call_gemini(model: str, api_key: str, system: str, user: str) -> str:
     return resp.text or ""
 
 
+def call_claude_code(model: str, _api_key: str, system: str, user: str) -> str:
+    """로컬 Claude Code CLI 를 헤드리스(-p)로 호출. 로그인된 Claude 구독 사용량으로 처리된다."""
+    cmd = [
+        claude_bin() or "claude", "-p",
+        "--output-format", "json",
+        "--json-schema", json.dumps(BRIEFING_SCHEMA),
+        "--model", model,
+        "--effort", os.getenv("LLM_EFFORT") or "medium",
+        "--system-prompt", system,
+        "--tools", "",                 # 도구 없이 순수 분석만
+        "--strict-mcp-config",         # 개인 MCP 서버 로드 안 함
+        "--setting-sources", "",       # 개인 설정·훅 영향 배제
+        "--no-session-persistence",
+    ]
+    # API 키가 환경에 있으면 claude 가 구독 대신 API 과금으로 동작하므로 제거
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    try:
+        proc = subprocess.run(
+            cmd, input=user, capture_output=True, text=True, env=env, timeout=CLAUDE_CODE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LLMError(f"claude CLI 가 {CLAUDE_CODE_TIMEOUT}초 안에 끝나지 않았습니다.") from exc
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        tail = (proc.stderr or proc.stdout).strip()[-300:]
+        raise LLMError(f"claude CLI 실행 실패 (exit {proc.returncode}): {tail}") from None
+    if data.get("is_error") or data.get("subtype") != "success":
+        raise LLMError(f"claude CLI 오류 ({data.get('subtype')}): {str(data.get('result'))[:300]}")
+    log.info(
+        "claude-code 응답: models=%s turns=%s duration=%.0fs usage(in=%s, out=%s)",
+        list((data.get("modelUsage") or {}).keys()), data.get("num_turns"),
+        (data.get("duration_ms") or 0) / 1000,
+        (data.get("usage") or {}).get("input_tokens"), (data.get("usage") or {}).get("output_tokens"),
+    )
+    if data.get("structured_output") is not None:
+        return json.dumps(data["structured_output"], ensure_ascii=False)
+    return str(data.get("result") or "")
+
+
 CALLERS: dict[str, Callable[[str, str, str, str], str]] = {
+    "claude-code": call_claude_code,
     "anthropic": call_anthropic,
     "openai": call_openai,
     "gemini": call_gemini,
