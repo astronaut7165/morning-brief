@@ -129,9 +129,14 @@ def _pick(rank: int, pick: Pick) -> str:
     if pick.score is not None:
         stars = f'<span class="stars" title="중요도 {pick.score}/5">{"★" * pick.score}{"☆" * (5 - pick.score)}</span>'
     out.append(f'<div class="actions">{_a("원문 보기", art.url, "btn")}{stars}</div>')
-    related = [(r.source, r.url) for r in pick.related] + list(art.also_in)
+    # 같은 매체가 여러 번 나와도 구분되도록 제목을 함께 보여 준다 (동시 보도는 매체명만 있음)
+    related = [(r.title, r.source, r.url) for r in pick.related] + [("", s, u) for s, u in art.also_in]
     if related:
-        out.append('<p class="related">관련 보도 · ' + " · ".join(_a(s, u) for s, u in related) + "</p>")
+        items = "".join(
+            f"<li>{_a(title or source, url)}" + (f"<small>{_e(source)}</small>" if title else "") + "</li>"
+            for title, source, url in related
+        )
+        out.append(f'<details class="related"><summary>관련 보도 {len(related)}건</summary><ul>{items}</ul></details>')
     out.append("</article>")
     return "\n".join(out)
 
@@ -229,7 +234,11 @@ font-size:14px;font-weight:700;line-height:26px;text-align:center}
 .actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}
 .btn{background:var(--accent-soft);color:var(--accent);border-radius:10px;padding:8px 14px;font-size:15px;font-weight:600}
 .stars{color:#f5a524;font-size:14px;letter-spacing:1px}
-.related{color:var(--muted);font-size:14px;line-height:1.6;margin-top:10px}
+details.related{margin-top:12px;border-top:1px solid var(--line)}
+details.related>summary{padding:10px 0 0;font-size:14px;font-weight:600;color:var(--muted)}
+.related ul{list-style:none;padding:0;margin:6px 0 0}
+.related li{padding:8px 0;border-top:1px dashed var(--line);font-size:15px;line-height:1.5}
+.related li small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
 .overview{background:var(--lens-soft);border-radius:16px;padding:18px 16px;margin:12px 0}
 .label{color:var(--lens);font-size:14px;font-weight:700;margin-bottom:6px}
 .refs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
