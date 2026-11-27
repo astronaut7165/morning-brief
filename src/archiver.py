@@ -1,4 +1,4 @@
-"""브리핑 결과를 Obsidian 호환 마크다운으로 vault/raw/YYYY/MM/YYYY-MM-DD.md 에 저장한다."""
+"""브리핑 결과를 Obsidian 호환 마크다운으로 vault/raw/[<브리핑 이름>/]YYYY/MM/YYYY-MM-DD.md 에 저장한다."""
 
 from __future__ import annotations
 
@@ -7,24 +7,41 @@ from pathlib import Path
 
 import yaml
 
-from analyzer import KST, Analysis, Briefing, Pick
+import market as mk
+from analyzer import KST, VIEW_ARROWS, Analysis, Briefing, Outlook, Pick
 from collector import Article, CollectResult
 
 WEEKDAYS = "월화수목금토일"
 FOLD_AT_OR_BELOW = 2  # 이 점수 이하 후보는 접어서 보여준다
-ANALYSIS_TITLE = "🧭 사업가의 시선"
-ANALYSIS_SUBTITLE = "오늘 소식을 어떤 눈으로 볼까"
+OUTLOOK_TITLE = "🔮 단기·장기 시선"
+OUTLOOK_NOTE = "주어진 시세와 소식을 근거로 한 판단이며, 가격 예측이나 투자 권유가 아닙니다."
 _TAG_UNSAFE_RE = re.compile(r"[^\w/-]+", re.UNICODE)
 
 
 def daily_path(vault_dir: Path, briefing: Briefing) -> Path:
     d = briefing.day
-    return vault_dir / "raw" / f"{d:%Y}" / f"{d:%m}" / f"{d.isoformat()}.md"
+    base = vault_dir / "raw" / briefing.info.name if briefing.info.name else vault_dir / "raw"
+    return base / f"{d:%Y}" / f"{d:%m}" / f"{d.isoformat()}.md"
 
 
 def title_line(briefing: Briefing) -> str:
     d = briefing.day
-    return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]}) 모닝 브리핑"
+    return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]}) {briefing.info.title}"
+
+
+def analysis_heading(briefing: Briefing) -> str:
+    info = briefing.info
+    return f"{info.analysis_title} — {info.analysis_subtitle}" if info.analysis_subtitle else info.analysis_title
+
+
+def coin_name(briefing: Briefing, symbol: str) -> str:
+    quotes = briefing.market.quotes if briefing.market else []
+    return next((f"{q.name} {q.symbol}" for q in quotes if q.symbol == symbol), symbol)
+
+
+def view_label(view: str, confidence: str = "") -> str:
+    label = f"{VIEW_ARROWS.get(view, '')} {view}".strip()
+    return f"{label}({confidence})" if confidence else label
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +75,7 @@ def refs_label(refs: list[int]) -> str:
 
 def source_label(art: Article) -> str:
     publisher = art.extra.get("publisher")
-    return f"{art.source} / {publisher}" if publisher else art.source
+    return f"{art.source} / {publisher}" if publisher and publisher != art.source else art.source
 
 
 def _tag(text: str) -> str:
@@ -91,8 +108,51 @@ def _render_pick(rank: int, pick: Pick) -> list[str]:
     return lines
 
 
-def _render_analysis(analysis: Analysis) -> list[str]:
-    lines = [f"## {ANALYSIS_TITLE} — {ANALYSIS_SUBTITLE}", ""]
+def _render_market(b: Briefing) -> list[str]:
+    m = b.market
+    lines = ["## 💹 시세", ""]
+    if not m:
+        errors = m.errors if m is not None else []
+        return lines + ["시세를 가져오지 못했습니다." + (f" ({', '.join(errors)})" if errors else ""), ""]
+    lines += [
+        "| 코인 | 가격 | 24시간 | 7일 | 30일 | 1년 | 최고가 대비 | 업비트 · 김프 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for q in m.quotes:
+        upbit = f"{mk.krw(q.krw)} · {mk.pct(q.premium, 2)}" if q.krw is not None else "–"
+        lines.append(
+            f"| {q.name} {q.symbol} | {mk.usd(q.usd)} | {mk.pct(q.change_24h)} | {mk.pct(q.change_7d)} | "
+            f"{mk.pct(q.change_30d)} | {mk.pct(q.change_1y)} | {mk.pct(q.ath_change)} | {upbit} |"
+        )
+    foot = []
+    if m.sentiment:
+        foot.append(f"공포·탐욕 지수 **{mk.sentiment_label(m.sentiment)}**")
+    foot.append(f"기준 {m.fetched_at.astimezone(KST):%m월 %d일 %H:%M}")
+    if m.errors:
+        foot.append("일부 실패: " + ", ".join(m.errors))
+    return lines + ["", " · ".join(foot), ""]
+
+
+def _render_outlook(b: Briefing, outlook: Outlook) -> list[str]:
+    lines = [f"## {OUTLOOK_TITLE}", ""]
+    if outlook.mood:
+        lines += [f"**지금 분위기** — {outlook.mood}", ""]
+    for c in outlook.coins:
+        lines += [
+            f"### {coin_name(b, c.symbol)} — 단기 {view_label(c.short_view, c.short_confidence)}"
+            f" · 장기 {view_label(c.long_view, c.long_confidence)}",
+            "",
+            f"- **단기(1~4주)** {c.short_reason}",
+            f"- **장기(6개월~)** {c.long_reason}",
+        ]
+        if c.signal:
+            lines.append(f"- **판단이 바뀌는 신호** {c.signal}")
+        lines.append("")
+    return lines + [f"<sub>괄호 안은 판단의 확신도(낮음·보통·높음). {OUTLOOK_NOTE}</sub>", ""]
+
+
+def _render_analysis(b: Briefing, analysis: Analysis) -> list[str]:
+    lines = [f"## {analysis_heading(b)}", ""]
     if analysis.overview:
         lines += [f"**큰 그림** — {analysis.overview}", ""]
     for lens in analysis.lenses:
@@ -154,15 +214,16 @@ def render_markdown(briefing: Briefing, result: CollectResult) -> str:
     categories = sorted({p.category for p in briefing.picks if p.category})
     front = {
         "date": briefing.day.isoformat(),
-        "type": "daily-briefing",
+        "type": f"{briefing.info.name}-briefing" if briefing.info.name else "daily-briefing",
         "engine": briefing.engine,
         "collected": len(result.articles),
         "candidates": len(briefing.candidates),
         "picks": len(briefing.picks),
-        "tags": ["briefing"] + [t for t in (_tag(c) for c in categories) if t],
+        "tags": ["briefing"] + ([briefing.info.name] if briefing.info.name else [])
+        + [t for t in (_tag(c) for c in categories) if t],
     }
     lines = ["---", yaml.safe_dump(front, allow_unicode=True, sort_keys=False).strip(), "---", ""]
-    lines += [f"# 🌅 {title_line(briefing)}", ""]
+    lines += [f"# {briefing.info.emoji} {title_line(briefing)}", ""]
 
     if briefing.headline:
         lines += [f"> **오늘의 주요 소식** — {briefing.headline}", ""]
@@ -173,14 +234,18 @@ def render_markdown(briefing: Briefing, result: CollectResult) -> str:
             "",
         ]
 
+    if briefing.market is not None:
+        lines += _render_market(briefing)
     lines += ["## 📰 오늘의 소식", ""]
     if briefing.picks:
         for rank, pick in enumerate(briefing.picks, 1):
             lines += _render_pick(rank, pick)
     else:
         lines += ["오늘은 기준 점수를 넘은 기사가 없습니다.", ""]
+    if briefing.outlook:
+        lines += ["---", ""] + _render_outlook(briefing, briefing.outlook)
     if briefing.analysis:
-        lines += ["---", ""] + _render_analysis(briefing.analysis)
+        lines += ["---", ""] + _render_analysis(briefing, briefing.analysis)
     lines += ["---", ""]
 
     if briefing.candidates:

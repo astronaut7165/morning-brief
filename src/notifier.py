@@ -22,15 +22,16 @@ from typing import Callable
 
 import requests
 
+import market as mk
 from analyzer import Briefing, Pick
-from archiver import ANALYSIS_SUBTITLE, ANALYSIS_TITLE, published_label, refs_label, title_line
+from archiver import OUTLOOK_TITLE, analysis_heading, coin_name, published_label, refs_label, title_line, view_label
 
 log = logging.getLogger(__name__)
 
 SCORE_COLORS = {5: 0xE8590C, 4: 0xF59F00, 3: 0x4DABF7}  # Discord embed 색상
 DEFAULT_COLOR = 0x868E96
 ANALYSIS_COLOR = 0x7048E8
-ANALYSIS_HEADING = f"{ANALYSIS_TITLE} — {ANALYSIS_SUBTITLE}"
+OUTLOOK_COLOR = 0x0CA678
 
 
 class NotifyError(RuntimeError):
@@ -62,7 +63,41 @@ def _post(url: str, label: str, attempts: int = 3, **kwargs) -> requests.Respons
 # 공통 문구
 # ─────────────────────────────────────────────────────────────────────────────
 def _header(b: Briefing) -> str:
-    return f"🌅 {title_line(b)}"
+    return f"{b.info.emoji} {title_line(b)}"
+
+
+def _quote_line(q: mk.Quote) -> str:
+    change = f"{mk.arrow(q.change_24h)}{abs(q.change_24h):.1f}%" if q.change_24h is not None else "–"
+    return f"{q.symbol} {mk.usd(q.usd)} {change} (7일 {mk.pct(q.change_7d)})"
+
+
+def _market_lines(b: Briefing) -> list[str]:
+    """시세 요약 줄. 코인 브리핑이 아니면 빈 목록."""
+    m = b.market
+    if m is None:
+        return []
+    if not m:
+        return ["시세를 가져오지 못했습니다."]
+    lines = [_quote_line(q) for q in m.quotes if q.usd is not None]
+    extra = []
+    if m.sentiment:
+        extra.append(f"공포·탐욕 {m.sentiment.value} {m.sentiment.label}")
+    if q := next((q for q in m.quotes if q.premium is not None), None):
+        extra.append(f"김프 {q.symbol} {mk.pct(q.premium, 2)}")
+    return lines + ([" · ".join(extra)] if extra else [])
+
+
+def _outlook_parts(b: Briefing, fmt: Callable[[str], str], bold: Callable[[str], str]) -> list[str]:
+    o = b.outlook
+    parts = [f"{bold('지금 분위기')} {fmt(o.mood)}"] if o.mood else []
+    for c in o.coins:
+        head = f"{coin_name(b, c.symbol)} — 단기 {view_label(c.short_view, c.short_confidence)} · 장기 {view_label(c.long_view, c.long_confidence)}"
+        lines = [bold(fmt(head))]
+        lines += [fmt(f"단기: {c.short_reason}"), fmt(f"장기: {c.long_reason}")]
+        if c.signal:
+            lines.append(fmt(f"🚩 바뀌는 신호: {c.signal}"))
+        parts.append("\n".join(lines))
+    return parts
 
 
 def _stats_line(b: Briefing) -> str:
@@ -130,6 +165,8 @@ def build_slack_payload(b: Briefing, archive_url: str | None) -> dict:
         blocks.append(section(f"> *{_slack_escape(b.headline)}*"))
     if warning := _warning(b):
         blocks.append(context(warning))
+    if market := _market_lines(b):
+        blocks.append(section(_slack_escape("\n".join(market))))
     blocks.append({"type": "divider"})
 
     for rank, p in enumerate(b.picks, 1):
@@ -139,8 +176,11 @@ def build_slack_payload(b: Briefing, archive_url: str | None) -> dict:
         blocks.append(section("\n".join(lines)))
     if not b.picks:
         blocks.append(section("오늘은 기준 점수를 넘은 기사가 없습니다."))
+    if b.outlook:
+        blocks += [{"type": "divider"}, section(f"*{OUTLOOK_TITLE}*")]
+        blocks += [section(part) for part in _outlook_parts(b, _slack_escape, lambda t: f"*{t}*")]
     if b.analysis:
-        blocks += [{"type": "divider"}, section(f"*{ANALYSIS_HEADING}*")]
+        blocks += [{"type": "divider"}, section(f"*{_slack_escape(analysis_heading(b))}*")]
         blocks += [section(part) for part in _analysis_parts(b, _slack_escape, lambda t: f"*{t}*")]
 
     footer = _stats_line(b)
@@ -166,6 +206,7 @@ def build_discord_messages(b: Briefing, archive_url: str | None) -> list[dict]:
         content_lines.append(f"> **{b.headline}**")
     if warning := _warning(b):
         content_lines.append(warning)
+    content_lines += _market_lines(b)
     if not b.picks:
         content_lines.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
 
@@ -178,9 +219,16 @@ def build_discord_messages(b: Briefing, archive_url: str | None) -> list[dict]:
             "color": SCORE_COLORS.get(p.score or 0, DEFAULT_COLOR),
             "footer": {"text": _meta(p)[:2048]},
         })
+    if b.outlook:
+        embeds.append({
+            "title": OUTLOOK_TITLE,
+            "description": "\n\n".join(_outlook_parts(b, str, lambda t: f"**{t}**"))[:4000],
+            "color": OUTLOOK_COLOR,
+            "footer": {"text": "가격 예측이나 투자 권유가 아닙니다"},
+        })
     if b.analysis:
         embeds.append({
-            "title": ANALYSIS_HEADING,
+            "title": analysis_heading(b)[:256],
             "description": "\n\n".join(_analysis_parts(b, str, lambda t: f"**{t}**"))[:4000],
             "color": ANALYSIS_COLOR,
             "footer": {"text": "위 소식들을 바탕으로 한 분석입니다"},
@@ -221,6 +269,7 @@ def build_telegram_messages(b: Briefing, archive_url: str | None) -> list[str]:
         head.append(f"<i>{esc(b.headline)}</i>")
     if warning := _warning(b):
         head.append(esc(warning))
+    head += [esc(line) for line in _market_lines(b)]
     blocks = ["\n".join(head)]
 
     for rank, p in enumerate(b.picks, 1):
@@ -232,8 +281,11 @@ def build_telegram_messages(b: Briefing, archive_url: str | None) -> list[str]:
         blocks.append("\n".join(lines)[:TELEGRAM_MSG_LIMIT])
     if not b.picks:
         blocks.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
+    if b.outlook:
+        blocks.append(f"<b>{esc(OUTLOOK_TITLE)}</b>")
+        blocks += [part[:TELEGRAM_MSG_LIMIT] for part in _outlook_parts(b, esc, lambda t: f"<b>{t}</b>")]
     if b.analysis:
-        blocks.append(f"<b>{esc(ANALYSIS_HEADING)}</b>")
+        blocks.append(f"<b>{esc(analysis_heading(b))}</b>")
         blocks += [part[:TELEGRAM_MSG_LIMIT] for part in _analysis_parts(b, esc, lambda t: f"<b>{t}</b>")]
 
     footer = esc(_stats_line(b))
@@ -309,7 +361,9 @@ def _pack(required: list[str], optional: list[str], limit: int = KAKAO_TEXT_LIMI
 
 
 def build_kakao_messages(b: Briefing) -> list[str]:
-    head = [f"🌅 {title_line(b)}"]
+    if b.info.kakao == "compact":
+        return build_kakao_compact(b)
+    head = [_header(b)]
     if b.headline:
         head.append(b.headline)
     if warning := _warning(b):
@@ -317,7 +371,7 @@ def build_kakao_messages(b: Briefing) -> list[str]:
     if b.picks:
         summary = f"📰 오늘의 소식 {len(b.picks)}건"
         if b.analysis.lenses:
-            summary += f" · 🧭 사업가의 시선 {len(b.analysis.lenses)}가지"
+            summary += f" · {b.info.analysis_title} {len(b.analysis.lenses)}가지"
         head += ["", summary]
     else:
         head += ["", "오늘은 기준 점수를 넘은 기사가 없습니다."]
@@ -332,7 +386,7 @@ def build_kakao_messages(b: Briefing) -> list[str]:
 
     a = b.analysis
     if a.overview:
-        prefix = f"{ANALYSIS_TITLE}\n\n큰 그림 — "
+        prefix = f"{b.info.analysis_title}\n\n큰 그림 — "
         messages.append(prefix + _sentences_fit(a.overview, KAKAO_TEXT_LIMIT - len(prefix)))
     for lens in a.lenses:
         # 카카오톡엔 '이름 · 핵심 한 문장 · 질문'만. 긴 설명은 전체 브리핑에서 본다
@@ -343,6 +397,43 @@ def build_kakao_messages(b: Briefing) -> list[str]:
         body = _sentences_fit(lens.takeaway or lens.insight, max(40, room))
         text = f"{top}\n{body}" + (f"\n\n{question}" if question else "")
         messages.append(_clip(text, KAKAO_TEXT_LIMIT))
+    return messages
+
+
+def build_kakao_compact(b: Briefing) -> list[str]:
+    """말풍선 3~4개 요약: 시세 → 단기·장기 시선 → 소식 제목 → 시선 핵심. 자세한 내용은 페이지에서."""
+    head = [_header(b)]
+    if warning := _warning(b):
+        head.append(warning)
+    market = _market_lines(b)
+    messages = [_pack(head + ([""] + market if market else []), [f"\n{b.headline}"] if b.headline else [])]
+
+    o = b.outlook
+    if o:
+        lines = [OUTLOOK_TITLE]
+        lines += [
+            f"{c.symbol} 단기 {view_label(c.short_view, c.short_confidence)} · 장기 {view_label(c.long_view, c.long_confidence)}"
+            for c in o.coins
+        ]
+        text = "\n".join(lines)
+        if o.mood:
+            prefix = "\n\n분위기 — "
+            room = KAKAO_TEXT_LIMIT - len(text) - len(prefix)
+            if room >= 30:
+                text += prefix + _sentences_fit(o.mood, room)
+        messages.append(_clip(text, KAKAO_TEXT_LIMIT))
+
+    if b.picks:
+        messages.append(_pack([f"📰 오늘의 소식 {len(b.picks)}건"], [f"{r}. {p.title}" for r, p in enumerate(b.picks, 1)]))
+    elif not o:
+        messages.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
+
+    lenses = b.analysis.lenses
+    if lenses:
+        messages.append(_pack(
+            [b.info.analysis_title],
+            [f"👀 {lens.name} — {lens.takeaway or _sentences_fit(lens.insight, 80)}" for lens in lenses],
+        ))
     return messages
 
 

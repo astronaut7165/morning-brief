@@ -1,5 +1,5 @@
 #!/bin/bash
-# 로컬 러너: 최신 상태로 pull → 브리핑 생성 → 커밋·push → 발송
+# 로컬 러너: 최신 상태로 pull → 브리핑(기술·비즈니스, 코인)마다 생성 → 커밋·push → 발송
 # launchd 가 매일 아침 실행합니다 (scripts/install_launchd.sh). 직접 실행해도 됩니다.
 #   bash scripts/run_local.sh              # 전체 실행
 #   bash scripts/run_local.sh --no-notify  # main.py 옵션 그대로 전달
@@ -31,8 +31,12 @@ run() {
 
   local py="$repo/.venv/bin/python"
   [ -x "$py" ] || py="$(command -v python3)"
-  "$py" src/main.py --publish "$@"
-  local status=$?
+  # 브리핑마다 설정 파일 하나: 기술·비즈니스 → 코인 순서. 하나가 실패해도 다음 것은 돈다
+  local status=0 cfg
+  for cfg in config/sources.yaml config/crypto.yaml; do
+    [ -f "$cfg" ] || continue
+    "$py" src/main.py --config "$cfg" --publish "$@" || status=1
+  done
 
   # main.py 가 못 올린 것이 있으면 마저 커밋·push (curated/ 의 작성 중인 노트는 건드리지 않음)
   local p

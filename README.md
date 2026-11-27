@@ -1,10 +1,10 @@
 # 🌅 Morning Brief
 
-매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업가의 시선** — 이 소식들을 어떤 눈으로 봐야 하는지 — 을 붙여 메신저(카카오톡 포함)로 보내며, 결과를 마크다운 지식 베이스(Vault)와 휴대폰용 웹페이지로 남기는 파이프라인입니다.
+매일 아침 기술·비즈니스 동향과 코인(비트코인·이더리움·리플) 시장을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업가의 시선** — 이 소식들을 어떤 눈으로 봐야 하는지 — 을 붙여 메신저(카카오톡 포함)로 보내며, 결과를 마크다운 지식 베이스(Vault)와 휴대폰용 웹페이지로 남기는 파이프라인입니다.
 
 ```
-내 Mac (launchd, 매일 07:00)
-  └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거
+내 Mac (launchd, 매일 07:00) — 브리핑마다(기술·비즈니스 → 코인) 아래를 반복
+  └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거 (코인은 시세·공포탐욕 지수도)
   └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고, 상위 5~7건의 사실 정리 + 사업가의 시선
   └─ archiver   vault/raw/YYYY/MM/YYYY-MM-DD.md 로 저장
   └─ webpage    docs/ 에 휴대폰용 페이지 생성 (GitHub Pages 로 공개)
@@ -19,7 +19,8 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 ```text
 .
 ├── .github/workflows/daily_briefing.yml  # (대안) GitHub Actions 실행 — 기본은 수동 실행만
-├── config/sources.yaml                   # 수집 소스 · 독자 프로필 · 산업군 트래킹 설정
+├── config/sources.yaml                   # 기술·비즈니스 브리핑: 수집 소스 · 독자 프로필 · 산업군 트래킹
+├── config/crypto.yaml                    # 코인 브리핑: 코인 목록 · 소스 · 독자 프로필
 ├── docs/                                 # 휴대폰용 페이지 (자동 생성, GitHub Pages 가 공개)
 ├── scripts/
 │   ├── install_launchd.sh                # 매일 아침 자동 실행 등록 (macOS)
@@ -27,13 +28,14 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 │   └── run_local.sh                      # pull → 브리핑 → 커밋·push
 ├── src/
 │   ├── collector.py                      # 소스별 수집, 중복 제거
-│   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 사업가의 시선
+│   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 분석(브리핑 종류별 프롬프트)
+│   ├── market.py                         # 코인 시세 · 김치 프리미엄 · 공포·탐욕 지수
 │   ├── notifier.py                       # 메신저 발송
 │   ├── archiver.py                       # 마크다운 생성
 │   ├── webpage.py                        # 휴대폰용 HTML 페이지 · 모아보기 생성
 │   └── main.py                           # 전체 파이프라인 실행
 ├── vault/
-│   ├── raw/                              # 날짜별 브리핑 자동 저장
+│   ├── raw/                              # 날짜별 브리핑 자동 저장 (코인은 raw/crypto/)
 │   └── curated/                          # 직접 인사이트를 덧붙여 옮긴 노트
 ├── state/seen.json                       # 이전 브리핑과의 중복 제거 기록 (자동 생성)
 ├── requirements.txt
@@ -105,6 +107,17 @@ tail -f ~/Library/Logs/morning-brief.log
 - 매일 실행은 **커밋·push → 페이지 배포 확인(최대 5분) → 발송** 순서라, 메시지를 받자마자 눌러도 열립니다.
 - 공개 저장소의 Pages 는 누구나 볼 수 있습니다(검색 엔진 색인만 막아 둠). 비공개 저장소의 Pages 는 GitHub 유료 플랜이 필요합니다.
 
+### 코인 브리핑
+
+기술·비즈니스 브리핑에 이어 `config/crypto.yaml` 로 코인 브리핑이 따로 만들어집니다. 저장 위치도 따로입니다(`vault/raw/crypto/`, `docs/crypto/`, 페이지 주소 `…github.io/<저장소>/crypto/`).
+
+- **시세**: 달러 가격, 24시간·7일·30일·1년 변동률, 사상 최고가 대비, 업비트 원화 가격과 김치 프리미엄, 공포·탐욕 지수 (CoinGecko·업비트·alternative.me, 키 불필요)
+- **오늘의 소식**: 코인별·시장 전체 주요 기사의 사실
+- **🔮 단기·장기 시선**: 지금 시장 분위기, 코인별 단기(1~4주)·장기(6개월~) 방향 기울기(상승 우위·하락 우위·중립)와 확신도, 근거, 판단이 바뀌는 신호. 하루치 시세와 뉴스로 내린 판단이라 가격 목표나 매수·매도 권유는 하지 않습니다.
+- **🔎 시장을 읽는 눈**: 자금 흐름·규제·수급 같은 시선 2~3개
+- 카카오톡은 말풍선 3~4개로 요약해 보냅니다(`kakao: compact`). 코인을 바꾸려면 `coins` 를, 끄려면 `brief.enabled: false`.
+- 다른 주제의 브리핑도 같은 방식으로 만들 수 있습니다. 설정 파일을 복사해 `brief.name`·`title` 을 바꾸고 `scripts/run_local.sh` 의 목록에 추가하세요.
+
 ### 수동 실행
 
 ```bash
@@ -112,6 +125,7 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
 .venv/bin/python src/main.py --dry-run --no-llm   # 수집만 점검 (파일·발송 없음)
 .venv/bin/python src/main.py --dry-run            # 분석 결과를 화면에만 출력
 .venv/bin/python src/main.py --no-notify          # vault 에 저장만
+.venv/bin/python src/main.py --config config/crypto.yaml --dry-run   # 코인 브리핑만 화면에 출력
 ```
 
 ## 설정 바꾸기 — `config/sources.yaml`

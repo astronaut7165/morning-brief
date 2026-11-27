@@ -50,11 +50,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SKIP_NOTIFY: ${{ github.event_name == 'workflow_dispatch' && !inputs.notify }}
         run: |
-          if [ "$SKIP_NOTIFY" = "true" ]; then
-            python src/main.py --no-notify
-          else
-            python src/main.py
-          fi
+          flags=""
+          [ "$SKIP_NOTIFY" = "true" ] && flags="--no-notify"
+          status=0
+          for cfg in config/sources.yaml config/crypto.yaml; do
+            [ -f "$cfg" ] || continue
+            python src/main.py --config "$cfg" $flags || status=1
+          done
+          exit $status
 
       # 분석이 실패해도(휴리스틱 대체) 수집 결과는 남기도록 항상 커밋
       - name: Commit vault

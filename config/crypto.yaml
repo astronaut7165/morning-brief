@@ -1,0 +1,86 @@
+# 코인 브리핑 설정 — 비트코인·이더리움·리플의 시세와 소식, 단기·장기 시선
+# 매일 아침 기술·비즈니스 브리핑(config/sources.yaml) 다음에 이어서 실행됩니다 (scripts/run_local.sh).
+# 저장 위치: vault/raw/crypto/YYYY/MM/, 휴대폰용 페이지: docs/crypto/
+
+brief:
+  enabled: true               # false 로 바꾸면 코인 브리핑을 건너뜁니다
+  name: crypto                # 저장 폴더 이름
+  title: 코인 브리핑
+  emoji: 🪙
+  prompt: crypto              # 분석 방식 (시장을 읽는 눈 + 단기·장기 시선)
+  analysis_title: 🔎 시장을 읽는 눈
+  analysis_subtitle: 오늘 시장을 어떤 눈으로 볼까
+  kakao: compact              # 카카오톡은 말풍선 3~4개로 요약 (시세 · 단기·장기 · 소식 · 시선)
+
+# 시세를 볼 코인. coingecko 는 CoinGecko id, upbit 는 업비트 원화 마켓 코드
+coins:
+  - {symbol: BTC, name: 비트코인, coingecko: bitcoin, upbit: KRW-BTC}
+  - {symbol: ETH, name: 이더리움, coingecko: ethereum, upbit: KRW-ETH}
+  - {symbol: XRP, name: 리플, coingecko: ripple, upbit: KRW-XRP}
+
+settings:
+  lookback_hours: 24
+  max_items_per_source: 20
+  max_candidates: 120
+  top_n: 6
+  min_score: 3
+  seen_retention_days: 14
+  web_page: true
+
+reader_profile: |
+  - 비트코인·이더리움·리플 세 코인의 흐름을 매일 아침 짧게 확인하고 싶은 사람
+  - 궁금한 것: 지금 시장 분위기가 어떤지, 단기적으로·장기적으로 어느 쪽으로 기울어 있는지, 그 근거가 무엇인지
+  - 개별 알트코인·밈코인보다 세 코인과 시장 전체(규제, ETF·기관 자금, 거시 경제, 한국 시장)에 관심
+  - 코인을 사업 기회의 관점에서도 본다 (스테이블코인, 결제, 수탁 같은 인프라)
+
+sources:
+  - name: CoinDesk
+    type: rss
+    url: https://www.coindesk.com/arc/outboundfeeds/rss/
+    tags: [crypto]
+
+  - name: Cointelegraph
+    type: rss
+    url: https://cointelegraph.com/rss
+    tags: [crypto]
+
+  - name: Decrypt
+    type: rss
+    url: https://decrypt.co/feed
+    tags: [crypto]
+
+  - name: The Block
+    type: rss
+    url: https://www.theblock.co/rss.xml
+    tags: [crypto]
+
+  - name: 블록미디어
+    type: rss
+    url: https://www.blockmedia.co.kr/feed
+    tags: [crypto, korea]
+
+  - name: 토큰포스트
+    type: rss
+    url: https://www.tokenpost.kr/rss
+    tags: [crypto, korea]
+
+  - name: Google News · 비트코인·이더리움·리플
+    type: google_news
+    query: 비트코인 OR 이더리움 OR 리플
+    lang: ko
+    max_items: 20
+    tags: [crypto, korea]
+
+  - name: Google News · XRP
+    type: google_news
+    query: XRP Ripple
+    lang: en
+    max_items: 10
+    tags: [crypto, xrp]
+
+  - name: Google News · Bitcoin ETF
+    type: google_news
+    query: Bitcoin OR Ethereum ETF flows
+    lang: en
+    max_items: 10
+    tags: [crypto, etf]

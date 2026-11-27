@@ -16,13 +16,15 @@ from urllib.parse import quote, urlsplit
 
 import requests
 
-from analyzer import KST, Analysis, Briefing, Pick
+import market as mk
+from analyzer import KST, VIEW_ARROWS, Analysis, BriefInfo, Briefing, Outlook, Pick
 from archiver import (
-    ANALYSIS_SUBTITLE,
-    ANALYSIS_TITLE,
     FOLD_AT_OR_BELOW,
+    OUTLOOK_NOTE,
+    OUTLOOK_TITLE,
     WEEKDAYS,
     candidate_groups,
+    coin_name,
     published_label,
     source_label,
 )
@@ -141,8 +143,80 @@ def _pick(rank: int, pick: Pick) -> str:
     return "\n".join(out)
 
 
-def _analysis(analysis: Analysis) -> str:
-    out = ['<section id="lens">', f"<h2>{_e(ANALYSIS_TITLE)}</h2>", f'<p class="sub">{_e(ANALYSIS_SUBTITLE)}</p>']
+def _trend(value: float | None) -> str:
+    return "up" if value and value > 0 else "down" if value and value < 0 else "flat"
+
+
+def _market(b: Briefing) -> str:
+    m = b.market
+    out = ['<section id="market">', "<h2>💹 시세</h2>"]
+    if not m:
+        out += ['<p class="empty">시세를 가져오지 못했습니다.</p>', "</section>"]
+        return "\n".join(out)
+    out.append('<div class="quotes">')
+    for q in m.quotes:
+        stats = [
+            ("7일", mk.pct(q.change_7d), _trend(q.change_7d)),
+            ("30일", mk.pct(q.change_30d), _trend(q.change_30d)),
+            ("1년", mk.pct(q.change_1y), _trend(q.change_1y)),
+            ("최고가 대비", mk.pct(q.ath_change), _trend(q.ath_change)),
+            ("업비트", mk.krw(q.krw), ""),
+            ("김프", mk.pct(q.premium, 2), _trend(q.premium)),
+        ]
+        cells = "".join(f'<div><dt>{label}</dt><dd class="{cls}">{_e(value)}</dd></div>' for label, value, cls in stats)
+        change = f"{mk.arrow(q.change_24h)}{abs(q.change_24h):.1f}%" if q.change_24h is not None else "–"
+        out.append(
+            '<div class="card quote">'
+            f'<div class="q-head"><p class="q-name">{_e(q.name)} <span>{_e(q.symbol)}</span></p>'
+            f'<p class="q-price">{_e(mk.usd(q.usd))}</p>'
+            f'<p class="q-chg {_trend(q.change_24h)}">{_e(change)}<small>24시간</small></p></div>'
+            f'<dl class="q-stats">{cells}</dl></div>'
+        )
+    out.append("</div>")
+    if s := m.sentiment:
+        week = f" · 1주 전 {s.week_ago}" if s.week_ago is not None else ""
+        out.append(
+            '<div class="card fng">'
+            f'<p class="fng-top"><span>공포·탐욕 지수</span><b>{s.value}</b><span class="fng-label">{_e(s.label)}{week}</span></p>'
+            f'<div class="gauge"><i style="left:{max(0, min(100, s.value))}%"></i></div>'
+            '<p class="gauge-ends"><span>극단적 공포</span><span>극단적 탐욕</span></p></div>'
+        )
+    note = f"기준 {m.fetched_at.astimezone(KST):%m월 %d일 %H:%M} · CoinGecko·업비트·alternative.me"
+    if m.errors:
+        note += " · 일부 실패: " + ", ".join(m.errors)
+    out += [f'<p class="meta">{_e(note)}</p>', "</section>"]
+    return "\n".join(out)
+
+
+_VIEW_CLASS = {"상승 우위": "up", "하락 우위": "down"}
+
+
+def _outlook(b: Briefing, outlook: Outlook) -> str:
+    out = ['<section id="outlook">', f"<h2>{_e(OUTLOOK_TITLE)}</h2>"]
+    if outlook.mood:
+        out.append(f'<div class="overview"><p class="label">지금 분위기</p><p>{_e(outlook.mood)}</p></div>')
+    for c in outlook.coins:
+        rows = []
+        for label, view, conf, reason in (
+            ("단기 · 1~4주", c.short_view, c.short_confidence, c.short_reason),
+            ("장기 · 6개월~", c.long_view, c.long_confidence, c.long_reason),
+        ):
+            badge = f'<span class="view {_VIEW_CLASS.get(view, "flat")}">{_e(VIEW_ARROWS.get(view, ""))} {_e(view)}</span>'
+            conf_html = f'<span class="conf">확신 {_e(conf)}</span>' if conf else ""
+            rows.append(
+                f'<div class="horizon"><p class="h-top"><span>{label}</span><span class="badges">{conf_html}{badge}</span></p>'
+                f"<p>{_e(reason)}</p></div>"
+            )
+        signal = f'<p class="signal">🚩 판단이 바뀌는 신호 — {_e(c.signal)}</p>' if c.signal else ""
+        out.append(f'<article class="card coin"><h3>{_e(coin_name(b, c.symbol))}</h3>{"".join(rows)}{signal}</article>')
+    out += [f'<p class="note">{_e(OUTLOOK_NOTE)}</p>', "</section>"]
+    return "\n".join(out)
+
+
+def _analysis(info: BriefInfo, analysis: Analysis) -> str:
+    out = ['<section id="lens">', f"<h2>{_e(info.analysis_title)}</h2>"]
+    if info.analysis_subtitle:
+        out.append(f'<p class="sub">{_e(info.analysis_subtitle)}</p>')
     if analysis.overview:
         out.append(f'<div class="overview"><p class="label">큰 그림</p><p>{_e(analysis.overview)}</p></div>')
     for lens in analysis.lenses:
@@ -200,9 +274,9 @@ def _sources(result: CollectResult) -> str:
 
 
 _CSS = """
-:root{--bg:#f5f5f3;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;
+:root{--bg:#f5f5f3;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;--up:#d63c3c;--down:#2e6bd9;
 --accent:#2563eb;--accent-soft:#eef3ff;--lens:#6d4ae6;--lens-soft:#f3effe;--warn-bg:#fff4e5;--warn:#8a4b00}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1012;--card:#1a1b1e;--text:#ececef;--muted:#a1a1aa;--line:#2b2c31;
+@media (prefers-color-scheme:dark){:root{--bg:#0f1012;--card:#1a1b1e;--text:#ececef;--muted:#a1a1aa;--line:#2b2c31;--up:#ff6b6b;--down:#6ea2ff;
 --accent:#7ea6ff;--accent-soft:#1c2640;--lens:#b39dff;--lens-soft:#241d3a;--warn-bg:#3a2a12;--warn:#ffcf8a}}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
@@ -271,6 +345,33 @@ footer .gen{color:var(--muted);font-size:13px;text-align:center;margin-top:16px}
 .list .date{display:block;font-weight:700}
 .list .desc{display:block;color:var(--muted);font-size:15px;margin-top:2px}
 .empty{color:var(--muted)}
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--muted)}
+.quotes .card{margin:10px 0}
+.q-head{display:flex;align-items:baseline;gap:10px}
+.q-name{font-weight:700;flex:1}
+.q-name span{color:var(--muted);font-weight:500;font-size:14px}
+.q-price{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.q-chg{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;min-width:64px}
+.q-chg small{display:block;color:var(--muted);font-weight:400;font-size:12px;line-height:1.2}
+.q-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px;margin:12px 0 0;padding-top:12px;border-top:1px solid var(--line)}
+.q-stats dt{color:var(--muted);font-size:12px}
+.q-stats dd{margin:0;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.fng-top{display:flex;align-items:baseline;gap:10px}
+.fng-top span:first-child{flex:1;font-weight:700}
+.fng-top b{font-size:22px}
+.fng-label{color:var(--muted);font-size:14px}
+.gauge{position:relative;height:8px;border-radius:99px;margin:14px 0 6px;
+background:linear-gradient(90deg,var(--down),#9aa3ad 50%,var(--up))}
+.gauge i{position:absolute;top:-4px;width:4px;height:16px;margin-left:-2px;border-radius:2px;background:var(--text)}
+.gauge-ends{display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
+.coin h3{margin-bottom:4px}
+.horizon{padding:12px 0 0;margin-top:12px;border-top:1px solid var(--line)}
+.h-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;color:var(--muted);font-size:14px;font-weight:600}
+.view{border-radius:999px;padding:2px 10px;font-size:14px;font-weight:700;background:var(--bg)}
+.badges{display:flex;align-items:center;gap:6px}
+.conf{color:var(--muted);font-size:12px;font-weight:500}
+.signal{margin-top:12px;padding:10px 12px;background:var(--bg);border-radius:10px;font-size:15px}
+.note{color:var(--muted);font-size:13px;margin-top:8px}
 """
 
 
@@ -299,30 +400,38 @@ def render_page(
     next_href: str | None = None,
     source_href: str | None = None,
 ) -> str:
-    d = b.day
-    body = ['<header>', '<p class="eyebrow">🌅 모닝 브리핑</p>', f"<h1>{_e(day_label(d))}</h1>"]
+    d, info = b.day, b.info
+    body = ["<header>", f'<p class="eyebrow">{_e(info.emoji)} {_e(info.title)}</p>', f"<h1>{_e(day_label(d))}</h1>"]
     if b.headline:
         body.append(f'<p class="headline">{_e(b.headline)}</p>')
     chips = []
+    if b.market is not None:
+        chips.append('<a href="#market">💹 시세</a>')
     if b.picks:
         chips.append(f'<a href="#news">📰 오늘의 소식 {len(b.picks)}</a>')
+    if b.outlook:
+        chips.append(f'<a href="#outlook">{_e(OUTLOOK_TITLE)}</a>')
     if b.analysis:
         count = f" {len(b.analysis.lenses)}" if b.analysis.lenses else ""
-        chips.append(f'<a href="#lens">🧭 사업가의 시선{count}</a>')
+        chips.append(f'<a href="#lens">{_e(info.analysis_title)}{count}</a>')
     if chips:
         body.append(f'<nav class="chips">{"".join(chips)}</nav>')
     body.append("</header>")
     if b.error:
         body.append('<p class="warn">⚠️ LLM 분석에 실패해 기본 정렬(동시 보도 수·HN 점수·최신순)로 대신 골랐습니다.</p>')
 
+    if b.market is not None:
+        body.append(_market(b))
     body += ['<section id="news">', "<h2>📰 오늘의 소식</h2>"]
     if b.picks:
         body += [_pick(rank, p) for rank, p in enumerate(b.picks, 1)]
     else:
         body.append('<p class="empty">오늘은 기준 점수를 넘은 기사가 없습니다.</p>')
     body.append("</section>")
+    if b.outlook:
+        body.append(_outlook(b, b.outlook))
     if b.analysis:
-        body.append(_analysis(b.analysis))
+        body.append(_analysis(info, b.analysis))
     if b.candidates:
         body.append(_candidates(b))
     body.append(_sources(result))
@@ -337,11 +446,12 @@ def render_page(
         gen += f' · <a href="{_href(source_href)}">마크다운 원본</a>'
     body.append(f'<footer><nav class="pagenav">{"".join(nav)}</nav><p class="gen">{gen}</p></footer>')
 
-    title = f"모닝 브리핑 · {d.month}월 {d.day}일 ({WEEKDAYS[d.weekday()]})"
+    title = f"{info.title} · {d.month}월 {d.day}일 ({WEEKDAYS[d.weekday()]})"
     return _document(title, b.headline or day_label(d), "\n".join(body))
 
 
-def render_index(docs_dir: Path) -> str:
+def render_index(docs_dir: Path, info: BriefInfo | None = None) -> str:
+    info = info or BriefInfo()
     months: dict[str, list[str]] = {}
     for day, path in reversed(_pages(docs_dir)):
         match = _DESC_RE.search(path.read_text(encoding="utf-8")[:4000])
@@ -351,13 +461,13 @@ def render_index(docs_dir: Path) -> str:
             f'<li><a href="{_e(href)}"><span class="date">{_e(day_label(day))}</span>'
             f'<span class="desc">{_e(desc)}</span></a></li>'
         )
-    body = ['<header><p class="eyebrow">🌅 모닝 브리핑</p><h1>모아보기</h1></header>', '<div class="months">']
+    body = [f'<header><p class="eyebrow">{_e(info.emoji)} {_e(info.title)}</p><h1>모아보기</h1></header>', '<div class="months">']
     for month, items in months.items():
         body += [f"<h2>{_e(month)}</h2>", f'<ul class="list">{"".join(items)}</ul>']
     if not months:
         body.append('<p class="empty">아직 브리핑이 없습니다.</p>')
     body.append("</div>")
-    return _document("모닝 브리핑 모아보기", "날짜별 모닝 브리핑", "\n".join(body))
+    return _document(f"{info.title} 모아보기", f"날짜별 {info.title}", "\n".join(body))
 
 
 def write_page(b: Briefing, result: CollectResult, docs_dir: Path, source_href: str | None = None) -> Path:
@@ -383,5 +493,5 @@ def write_page(b: Briefing, result: CollectResult, docs_dir: Path, source_href: 
             link = f'<a class="navbtn" href="{_e(rel(path))}">다음 브리핑 →</a>'
             prev[1].write_text(text.replace(NEXT_SLOT, link), encoding="utf-8")
     (docs_dir / ".nojekyll").touch()
-    (docs_dir / "index.html").write_text(render_index(docs_dir), encoding="utf-8")
+    (docs_dir / "index.html").write_text(render_index(docs_dir, b.info), encoding="utf-8")
     return path
