@@ -23,7 +23,7 @@ from typing import Callable
 import requests
 
 import market as mk
-from analyzer import Briefing, Pick
+from analyzer import VIEW_ARROWS, Briefing, Pick
 from archiver import OUTLOOK_TITLE, analysis_heading, coin_name, published_label, refs_label, title_line, view_label
 
 log = logging.getLogger(__name__)
@@ -78,13 +78,18 @@ def _market_lines(b: Briefing) -> list[str]:
         return []
     if not m:
         return ["시세를 가져오지 못했습니다."]
-    lines = [_quote_line(q) for q in m.quotes if q.usd is not None]
+    return [_quote_line(q) for q in m.quotes if q.usd is not None] + _market_extra(b)
+
+
+def _market_extra(b: Briefing) -> list[str]:
+    """공포·탐욕 지수와 김치 프리미엄 한 줄."""
+    m = b.market
     extra = []
-    if m.sentiment:
+    if m and m.sentiment:
         extra.append(f"공포·탐욕 {m.sentiment.value} {m.sentiment.label}")
-    if q := next((q for q in m.quotes if q.premium is not None), None):
+    if m and (q := next((q for q in m.quotes if q.premium is not None), None)):
         extra.append(f"김프 {q.symbol} {mk.pct(q.premium, 2)}")
-    return lines + ([" · ".join(extra)] if extra else [])
+    return [" · ".join(extra)] if extra else []
 
 
 def _outlook_parts(b: Briefing, fmt: Callable[[str], str], bold: Callable[[str], str]) -> list[str]:
@@ -334,17 +339,6 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _sentences_fit(text: str, limit: int) -> str:
-    """문장 단위로 limit 안에 들어가는 만큼만. 첫 문장도 안 들어가면 그때만 자른다."""
-    out = ""
-    for sentence in re.split(r"(?<=[.!?。])\s+", text.strip()):
-        candidate = f"{out} {sentence}".strip()
-        if len(candidate) > limit:
-            break
-        out = candidate
-    return out or _clip(text, limit)
-
-
 def _pack(required: list[str], optional: list[str], limit: int = KAKAO_TEXT_LIMIT) -> str:
     """required 줄은 항상 넣고(넘치면 자름), optional 줄은 들어가는 만큼만 넣는다."""
     text = _clip("\n".join(required), limit)
@@ -360,81 +354,38 @@ def _pack(required: list[str], optional: list[str], limit: int = KAKAO_TEXT_LIMI
     return text
 
 
+def _kakao_coin_line(b: Briefing, q: mk.Quote) -> str:
+    change = f"{mk.arrow(q.change_24h)}{abs(q.change_24h):.1f}%" if q.change_24h is not None else "–"
+    line = f"{q.symbol} {mk.usd(q.usd)} {change}"
+    if view := next((c for c in b.outlook.coins if c.symbol == q.symbol), None):
+        line += f" · 단기 {VIEW_ARROWS.get(view.short_view, '→')} 장기 {VIEW_ARROWS.get(view.long_view, '→')}"
+    return line
+
+
 def build_kakao_messages(b: Briefing) -> list[str]:
-    if b.info.kakao == "compact":
-        return build_kakao_compact(b)
-    head = [_header(b)]
-    if b.headline:
-        head.append(b.headline)
+    """주제별 말풍선 하나. 핵심만 담고, 자세한 내용은 '전체 브리핑 보기'(휴대폰용 페이지)에서 본다."""
+    lines = [_header(b)]
     if warning := _warning(b):
-        head.append(warning)
-    if b.picks:
-        summary = f"📰 오늘의 소식 {len(b.picks)}건"
-        if b.analysis.lenses:
-            summary += f" · {b.info.analysis_title} {len(b.analysis.lenses)}가지"
-        head += ["", summary]
-    else:
-        head += ["", "오늘은 기준 점수를 넘은 기사가 없습니다."]
-    messages = [_clip("\n".join(head), KAKAO_TEXT_LIMIT)]
-
-    for rank, p in enumerate(b.picks, 1):
-        source = p.article.extra.get("publisher") or p.article.source
-        messages.append(_pack(
-            [f"{rank}. {p.title}", f"{source} · {published_label(p.article)} 발행"],
-            [f"• {fact}" for fact in p.facts],
-        ))
-
-    a = b.analysis
-    if a.overview:
-        prefix = f"{b.info.analysis_title}\n\n큰 그림 — "
-        messages.append(prefix + _sentences_fit(a.overview, KAKAO_TEXT_LIMIT - len(prefix)))
-    for lens in a.lenses:
-        # 카카오톡엔 '이름 · 핵심 한 문장 · 질문'만. 긴 설명은 전체 브리핑에서 본다
-        ref = refs_label(lens.refs)
-        top = f"👀 {lens.name}" + (f" {ref}" if ref else "")
-        question = f"❓ {lens.question}" if lens.question else ""
-        room = KAKAO_TEXT_LIMIT - len(top) - 1 - (len(question) + 2 if question else 0)
-        body = _sentences_fit(lens.takeaway or lens.insight, max(40, room))
-        text = f"{top}\n{body}" + (f"\n\n{question}" if question else "")
-        messages.append(_clip(text, KAKAO_TEXT_LIMIT))
-    return messages
-
-
-def build_kakao_compact(b: Briefing) -> list[str]:
-    """말풍선 3~4개 요약: 시세 → 단기·장기 시선 → 소식 제목 → 시선 핵심. 자세한 내용은 페이지에서."""
-    head = [_header(b)]
-    if warning := _warning(b):
-        head.append(warning)
-    market = _market_lines(b)
-    messages = [_pack(head + ([""] + market if market else []), [f"\n{b.headline}"] if b.headline else [])]
-
-    o = b.outlook
-    if o:
-        lines = [OUTLOOK_TITLE]
-        lines += [
-            f"{c.symbol} 단기 {view_label(c.short_view, c.short_confidence)} · 장기 {view_label(c.long_view, c.long_confidence)}"
-            for c in o.coins
-        ]
-        text = "\n".join(lines)
-        if o.mood:
-            prefix = "\n\n분위기 — "
-            room = KAKAO_TEXT_LIMIT - len(text) - len(prefix)
-            if room >= 30:
-                text += prefix + _sentences_fit(o.mood, room)
-        messages.append(_clip(text, KAKAO_TEXT_LIMIT))
-
-    if b.picks:
-        messages.append(_pack([f"📰 오늘의 소식 {len(b.picks)}건"], [f"{r}. {p.title}" for r, p in enumerate(b.picks, 1)]))
-    elif not o:
-        messages.append("오늘은 기준 점수를 넘은 기사가 없습니다.")
-
-    lenses = b.analysis.lenses
-    if lenses:
-        messages.append(_pack(
-            [b.info.analysis_title],
-            [f"👀 {lens.name} — {lens.takeaway or _sentences_fit(lens.insight, 80)}" for lens in lenses],
-        ))
-    return messages
+        lines.append(warning)
+    optional: list[str] = []
+    m = b.market
+    if m is not None:  # 코인: 코인별 시세와 단기·장기 방향, 심리 지표
+        lines.append("")
+        if m:
+            lines += [_kakao_coin_line(b, q) for q in m.quotes if q.usd is not None] + _market_extra(b)
+        else:
+            lines.append("시세를 가져오지 못했습니다.")
+        if b.headline:
+            optional.append(f"\n{b.headline}")
+    else:  # 기술·비즈니스: 주요 소식 한 줄 + 들어가는 만큼 기사 제목
+        if b.headline:
+            lines += ["", b.headline]
+        if b.picks:
+            optional = [f"{r}. {p.title}" for r, p in enumerate(b.picks, 1)]
+            optional[0] = "\n" + optional[0]  # 제목 목록 앞에 빈 줄
+        else:
+            lines += ["", "오늘은 기준 점수를 넘은 기사가 없습니다."]
+    return [_pack(lines, optional)]
 
 
 def kakao_token_file() -> Path:

@@ -118,7 +118,6 @@ class BriefInfo:
     prompt: str = "business"
     analysis_title: str = "🧭 사업가의 시선"
     analysis_subtitle: str = "오늘 소식을 어떤 눈으로 볼까"
-    kakao: str = "full"  # full: 기사별 말풍선 | compact: 3~4개로 요약
 
     @classmethod
     def from_config(cls, config: dict) -> "BriefInfo":

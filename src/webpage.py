@@ -60,14 +60,19 @@ def page_url(path: Path, docs_dir: Path, repo_url: str | None) -> str | None:
     return f"{base}/{quote(path.relative_to(docs_dir).as_posix())}" if base else None
 
 
-def wait_until_live(url: str, timeout: float = 300, interval: float = 10) -> bool:
-    """push 직후 GitHub Pages 배포가 끝나 페이지가 열릴 때까지 기다린다."""
+def page_marker(b: Briefing) -> str:
+    """페이지마다 박아 두는 생성 시각. 같은 날 다시 만들었을 때 새 버전이 배포됐는지 구분한다."""
+    return b.generated_at.isoformat(timespec="seconds")
+
+
+def wait_until_live(url: str, timeout: float = 300, interval: float = 10, expect: str | None = None) -> bool:
+    """push 직후 GitHub Pages 배포가 끝나 페이지가 열릴 때까지 기다린다. expect 가 있으면 그 문자열이 보일 때까지."""
     deadline = time.monotonic() + timeout
     while True:
         try:
             # 캐시된 404 를 피하려고 매번 다른 주소로 확인
             resp = requests.get(url, params={"t": time.time_ns()}, timeout=15)
-            if resp.status_code == 200:
+            if resp.status_code == 200 and (expect is None or expect in resp.text):
                 return True
         except requests.RequestException:
             pass
@@ -375,7 +380,7 @@ background:linear-gradient(90deg,var(--down),#9aa3ad 50%,var(--up))}
 """
 
 
-def _document(title: str, description: str, body: str) -> str:
+def _document(title: str, description: str, body: str, marker: str = "") -> str:
     return (
         "<!doctype html>\n"
         '<html lang="ko">\n<head>\n<meta charset="utf-8">\n'
@@ -383,7 +388,8 @@ def _document(title: str, description: str, body: str) -> str:
         '<meta name="color-scheme" content="light dark">\n'
         '<meta name="robots" content="noindex">\n'
         f'<meta name="description" content="{_e(description)}">\n'
-        f"<title>{_e(title)}</title>\n<style>{_CSS}</style>\n</head>\n"
+        + (f'<meta name="brief-generated" content="{_e(marker)}">\n' if marker else "")
+        + f"<title>{_e(title)}</title>\n<style>{_CSS}</style>\n</head>\n"
         f'<body>\n<main class="wrap">\n{body}\n</main>\n</body>\n</html>\n'
     )
 
@@ -447,7 +453,7 @@ def render_page(
     body.append(f'<footer><nav class="pagenav">{"".join(nav)}</nav><p class="gen">{gen}</p></footer>')
 
     title = f"{info.title} · {d.month}월 {d.day}일 ({WEEKDAYS[d.weekday()]})"
-    return _document(title, b.headline or day_label(d), "\n".join(body))
+    return _document(title, b.headline or day_label(d), "\n".join(body), marker=page_marker(b))
 
 
 def render_index(docs_dir: Path, info: BriefInfo | None = None) -> str:

@@ -10,7 +10,6 @@ brief:
   prompt: crypto              # 분석 방식 (시장을 읽는 눈 + 단기·장기 시선)
   analysis_title: 🔎 시장을 읽는 눈
   analysis_subtitle: 오늘 시장을 어떤 눈으로 볼까
-  kakao: compact              # 카카오톡은 말풍선 3~4개로 요약 (시세 · 단기·장기 · 소식 · 시선)
 
 # 시세를 볼 코인. coingecko 는 CoinGecko id, upbit 는 업비트 원화 마켓 코드
 coins:

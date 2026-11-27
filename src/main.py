@@ -28,7 +28,7 @@ from archiver import render_markdown, write_daily
 from collector import SeenStore, collect
 from market import fetch_market
 from notifier import notify
-from webpage import page_url, wait_until_live, write_page
+from webpage import page_marker, page_url, wait_until_live, write_page
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_PATHS = ("vault/raw", "state", "docs")  # 자동화가 만드는 파일만 (curated/ 는 건드리지 않음)
@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if published and page_link:
             log.info("GitHub Pages 배포 대기: %s", page_link)
-            wait_until_live(page_link)
+            wait_until_live(page_link, expect=page_marker(briefing))
         sent = notify(briefing, link)
         notify_failed = bool(sent) and not all(sent.values())
 
