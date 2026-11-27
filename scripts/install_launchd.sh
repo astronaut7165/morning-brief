@@ -80,4 +80,5 @@ echo "  로그 보기:      tail -f \"$LOG\""
 echo "  해제:          bash scripts/install_launchd.sh --uninstall"
 echo
 echo "참고: 그 시각에 Mac 이 잠자기 중이면 깨어날 때 실행되고, 꺼져 있으면 그날은 건너뜁니다."
-printf '      매일 자동으로 깨우려면: sudo pmset repeat wakeorpoweron MTWRFSU %02d:%02d:00\n' "$HOUR" "$(( MINUTE >= 5 ? MINUTE - 5 : 0 ))"
+WAKE=$(( (10#$HOUR * 60 + 10#$MINUTE + 1435) % 1440 ))   # 실행 5분 전
+printf '      매일 자동으로 깨우려면: sudo pmset repeat wakeorpoweron MTWRFSU %02d:%02d:00\n' "$(( WAKE / 60 ))" "$(( WAKE % 60 ))"
