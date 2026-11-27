@@ -22,6 +22,7 @@ settings:
   top_n: 6                    # 브리핑에 담을 상위 기사 수 (5~7 권장)
   min_score: 3                # 이 점수 미만은 Top Picks에서 제외 (1~5)
   seen_retention_days: 14     # 이전 브리핑과의 중복 제거 기록을 며칠 보관할지
+  web_page: true              # docs/ 에 휴대폰용 페이지를 만들고 메신저 링크를 그 페이지로 (GitHub Pages 필요)
 
 # LLM이 '누구의 관점'에서 점수를 매기고 분석할지 정합니다. 본인 상황에 맞게 고쳐 쓰세요.
 reader_profile: |

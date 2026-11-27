@@ -5,6 +5,7 @@
   python src/main.py --dry-run       # 저장·발송·기록 갱신 없이 결과 마크다운만 출력
   python src/main.py --no-llm        # LLM 없이 기본 정렬로 (수집/발송 점검용)
   python src/main.py --no-notify     # 아카이브만 남기고 메신저는 보내지 않음
+  python src/main.py --publish       # 발송 전에 결과를 커밋·push (메신저 링크가 바로 열리도록, run_local.sh 가 사용)
 """
 
 from __future__ import annotations
@@ -25,8 +26,10 @@ from analyzer import KST, analyze
 from archiver import render_markdown, write_daily
 from collector import SeenStore, collect
 from notifier import notify
+from webpage import page_url, wait_until_live, write_page
 
 ROOT = Path(__file__).resolve().parent.parent
+PUBLISH_PATHS = ("vault/raw", "state", "docs")  # 자동화가 만드는 파일만 (curated/ 는 건드리지 않음)
 log = logging.getLogger("morning-brief")
 
 
@@ -71,12 +74,37 @@ def archive_url(path: Path) -> str | None:
     return f"{base}/blob/{quote(branch)}/{quote(path.relative_to(ROOT).as_posix())}"
 
 
+def publish(day) -> bool:
+    """자동화가 만든 파일을 커밋하고 push 한다. 메신저 링크가 열리도록 발송 전에 부른다."""
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, timeout=120)
+
+    try:
+        paths = [p for p in PUBLISH_PATHS if (ROOT / p).exists()]
+        git("add", "--", *paths)
+        if git("diff", "--cached", "--quiet").returncode != 0:
+            commit = git("commit", "-q", "-m", f"briefing: {day.isoformat()}")
+            if commit.returncode != 0:
+                log.warning("git commit 실패: %s", (commit.stderr or commit.stdout).strip()[:300])
+                return False
+        push = git("push", "-q")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("커밋·push 실패: %s", exc)
+        return False
+    if push.returncode != 0:
+        log.warning("git push 실패: %s", push.stderr.strip()[:300])
+        return False
+    log.info("커밋·push 완료")
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="매일 아침 기술·비즈니스 브리핑 생성")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "sources.yaml")
     parser.add_argument("--dry-run", action="store_true", help="저장·발송·기록 갱신 없이 결과를 출력")
     parser.add_argument("--no-llm", action="store_true", help="LLM 없이 기본 정렬로 브리핑")
     parser.add_argument("--no-notify", action="store_true", help="메신저 발송 생략")
+    parser.add_argument("--publish", action="store_true", help="발송 전에 결과를 커밋·push")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -105,21 +133,37 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(render_markdown(briefing, result))
         return 0
 
-    # 3) 아카이브 + 중복 기록 갱신
+    # 3) 아카이브 + 휴대폰용 페이지 + 중복 기록 갱신
     path = write_daily(briefing, result, ROOT / "vault")
     log.info("아카이브 저장: %s", path.relative_to(ROOT))
+    link = archive_url(path)
+    page_link = None
+    if settings.get("web_page"):
+        docs = ROOT / "docs"
+        page = write_page(briefing, result, docs, source_href=link)
+        log.info("휴대폰용 페이지: %s", page.relative_to(ROOT))
+        page_link = page_url(page, docs, repo_web_url())
+        link = page_link or link
     seen.mark([a.key for a in briefing.candidates])
     seen.save()
 
-    # 4) 발송
+    # 4) 커밋·push — 메신저 링크가 받자마자 열리도록 발송보다 먼저
+    published = publish(briefing.day) if args.publish else None
+
+    # 5) 발송
     notify_failed = False
     if args.no_notify:
         log.info("--no-notify: 메신저 발송을 건너뜁니다")
     else:
-        sent = notify(briefing, archive_url(path))
+        if published and page_link:
+            log.info("GitHub Pages 배포 대기: %s", page_link)
+            wait_until_live(page_link)
+        sent = notify(briefing, link)
         notify_failed = bool(sent) and not all(sent.values())
 
     problems = []
+    if published is False:
+        problems.append("커밋·push 실패")
     if briefing.error:
         problems.append("LLM 분석 실패(휴리스틱으로 대체)")
     if result.stats and len(result.failed_sources) == len(result.stats):

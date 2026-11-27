@@ -1,5 +1,5 @@
 #!/bin/bash
-# 로컬 러너: 최신 상태로 pull → 브리핑 생성·발송 → vault 커밋·push
+# 로컬 러너: 최신 상태로 pull → 브리핑 생성 → 커밋·push → 발송
 # launchd 가 매일 아침 실행합니다 (scripts/install_launchd.sh). 직접 실행해도 됩니다.
 #   bash scripts/run_local.sh              # 전체 실행
 #   bash scripts/run_local.sh --no-notify  # main.py 옵션 그대로 전달
@@ -24,13 +24,15 @@ git pull --rebase --autostash -q || echo "⚠️ git pull 실패 — 로컬 상�
 
 PY="$REPO/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
-"$PY" src/main.py "$@"
+"$PY" src/main.py --publish "$@"
 status=$?
 
-# 자동화가 만드는 파일만 커밋 (curated/ 의 작성 중인 노트는 건드리지 않음)
-git add vault/raw state
+# main.py 가 못 올린 것이 있으면 마저 커밋·push (curated/ 의 작성 중인 노트는 건드리지 않음)
+for p in vault/raw state docs; do [ -e "$p" ] && git add "$p"; done
 if ! git diff --cached --quiet; then
   git commit -q -m "briefing: $(date +%F)" && echo "커밋 완료"
+fi
+if [ -n "$(git log --oneline '@{u}..' 2>/dev/null)" ]; then
   git push -q && echo "push 완료" || echo "⚠️ git push 실패 — 다음 실행 때 함께 올라갑니다"
 fi
 

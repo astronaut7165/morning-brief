@@ -56,7 +56,7 @@ def refs_label(refs: list[int]) -> str:
     return f"({'·'.join(map(str, refs))}번)" if refs else ""
 
 
-def _source_label(art: Article) -> str:
+def source_label(art: Article) -> str:
     publisher = art.extra.get("publisher")
     return f"{art.source} / {publisher}" if publisher else art.source
 
@@ -70,7 +70,7 @@ def _render_pick(rank: int, pick: Pick) -> list[str]:
     meta = [f"`{_stars(pick.score)}`"]
     if pick.category:
         meta.append(pick.category)
-    meta.append(_link(_source_label(art), art.url))
+    meta.append(_link(source_label(art), art.url))
     meta.append(f"{published_label(art)} 발행")
     if art.also_in:
         meta.append(f"동시 보도 {len(art.also_in)}곳")
@@ -106,23 +106,27 @@ def _render_analysis(analysis: Analysis) -> list[str]:
     return lines
 
 
-def _render_candidates(briefing: Briefing) -> list[str]:
-    picked = {id(p.article) for p in briefing.picks}
+def candidate_groups(briefing: Briefing) -> list[tuple[int | None, list[Article]]]:
+    """후보를 점수별로 묶는다. 높은 점수부터, 미평가는 맨 뒤, 각 묶음은 최신순."""
     buckets: dict[int | None, list[Article]] = {}
     for idx, art in enumerate(briefing.candidates):
         buckets.setdefault(briefing.scores.get(idx), []).append(art)
-
-    lines = [f"## 📋 전체 후보 {len(briefing.candidates)}건", ""]
     order = sorted((k for k in buckets if k is not None), reverse=True)
     if None in buckets:
         order.append(None)
-    for score in order:
+    return [(s, sorted(buckets[s], key=lambda a: a.published, reverse=True)) for s in order]
+
+
+def _render_candidates(briefing: Briefing) -> list[str]:
+    picked = {id(p.article) for p in briefing.picks}
+    lines = [f"## 📋 전체 후보 {len(briefing.candidates)}건", ""]
+    for score, arts in candidate_groups(briefing):
         label = "미평가" if score is None else f"{'★' * score} {score}점"
         rows = []
-        for art in sorted(buckets[score], key=lambda a: a.published, reverse=True):
+        for art in arts:
             mark = "🔝 " if id(art) in picked else ""
             extra = f" · +{len(art.also_in)}곳" if art.also_in else ""
-            rows.append(f"- {mark}{_link(art.title, art.url)} — {_source_label(art)} · {_kst(art)}{extra}")
+            rows.append(f"- {mark}{_link(art.title, art.url)} — {source_label(art)} · {_kst(art)}{extra}")
         if score is not None and score <= FOLD_AT_OR_BELOW:
             # Obsidian 에서 접힌 상태로 보이는 callout
             lines += [f"> [!note]- {label} ({len(rows)}) — 펼쳐 보기"] + [f"> {r}" for r in rows] + [""]

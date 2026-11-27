@@ -1,14 +1,15 @@
 # 🌅 Morning Brief
 
-매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업가의 시선** — 이 소식들을 어떤 눈으로 봐야 하는지 — 을 붙여 메신저(카카오톡 포함)로 보내며, 결과를 마크다운 지식 베이스(Vault)에 쌓는 파이프라인입니다.
+매일 아침 기술·비즈니스 동향을 자동으로 모아 Claude로 중요한 기사를 고릅니다. 기사별 **사실**(날짜 포함)을 먼저 전하고, 마지막에 **사업가의 시선** — 이 소식들을 어떤 눈으로 봐야 하는지 — 을 붙여 메신저(카카오톡 포함)로 보내며, 결과를 마크다운 지식 베이스(Vault)와 휴대폰용 웹페이지로 남기는 파이프라인입니다.
 
 ```
 내 Mac (launchd, 매일 07:00)
   └─ collector  RSS · Google News · Hacker News 에서 최근 24시간 기사 수집, 중복 제거
   └─ analyzer   Claude Code(`claude -p`, 구독 로그인)가 모든 기사를 1~5점으로 매기고, 상위 5~7건의 사실 정리 + 사업가의 시선
   └─ archiver   vault/raw/YYYY/MM/YYYY-MM-DD.md 로 저장
-  └─ notifier   카카오톡 / Slack / Discord / Telegram 으로 발송
-  └─ git commit & push
+  └─ webpage    docs/ 에 휴대폰용 페이지 생성 (GitHub Pages 로 공개)
+  └─ git commit & push → 페이지가 열리는지 확인
+  └─ notifier   카카오톡 / Slack / Discord / Telegram 으로 발송 ('전체 브리핑 보기' → 휴대폰용 페이지)
 ```
 
 API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석합니다. 원하면 GitHub Actions + API 키 방식으로도 돌릴 수 있습니다([아래](#대안-github-actions--api-키)).
@@ -19,6 +20,7 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 .
 ├── .github/workflows/daily_briefing.yml  # (대안) GitHub Actions 실행 — 기본은 수동 실행만
 ├── config/sources.yaml                   # 수집 소스 · 독자 프로필 · 산업군 트래킹 설정
+├── docs/                                 # 휴대폰용 페이지 (자동 생성, GitHub Pages 가 공개)
 ├── scripts/
 │   ├── install_launchd.sh                # 매일 아침 자동 실행 등록 (macOS)
 │   ├── kakao_auth.py                     # 카카오톡 '나에게 보내기' 최초 로그인
@@ -28,6 +30,7 @@ API 키 없이 **로컬 Claude Code에 로그인된 Claude 구독**으로 분석
 │   ├── analyzer.py                       # LLM 점수화(1~5) · 사실 정리 · 사업가의 시선
 │   ├── notifier.py                       # 메신저 발송
 │   ├── archiver.py                       # 마크다운 생성
+│   ├── webpage.py                        # 휴대폰용 HTML 페이지 · 모아보기 생성
 │   └── main.py                           # 전체 파이프라인 실행
 ├── vault/
 │   ├── raw/                              # 날짜별 브리핑 자동 저장
@@ -77,7 +80,7 @@ tail -f ~/Library/Logs/morning-brief.log
 2. 앱 키의 **REST API 키**를 `.env` 의 `KAKAO_REST_API_KEY` 에, **클라이언트 시크릿**(기본으로 켜져 있음)을 `KAKAO_CLIENT_SECRET` 에 넣습니다.
 3. **카카오 로그인**을 켜고 Redirect URI 에 `http://localhost:8765/callback` 을 등록합니다.
 4. **동의항목**에서 '카카오톡 메시지 전송(talk_message)'을 사용하도록 설정합니다.
-5. **제품 링크 관리 > 웹 도메인**에 `https://github.com` 을 등록합니다. 메시지 버튼('전체 브리핑 보기')이 GitHub 의 아카이브로 연결되는데, 등록된 도메인만 열립니다.
+5. **제품 링크 관리 > 웹 도메인**에 `https://<GitHub계정>.github.io`(휴대폰용 페이지)와 `https://github.com` 을 등록합니다. 메시지 버튼('전체 브리핑 보기')은 등록된 도메인만 열립니다.
 6. 로그인을 한 번 합니다. 브라우저에서 로그인·동의를 마치면 카카오톡으로 확인 메시지가 옵니다.
    ```bash
    .venv/bin/python scripts/kakao_auth.py
@@ -87,6 +90,20 @@ tail -f ~/Library/Logs/morning-brief.log
 - 토큰은 저장소 밖 `~/.config/morning-brief/kakao_token.json` 에 보관되고 매일 실행할 때 자동으로 갱신됩니다. 두 달 넘게 실행하지 않아 만료되면 6번만 다시 하면 됩니다.
 - localhost 리다이렉트가 막히면 Redirect URI 를 다른 주소로 등록하고 `.env` 의 `KAKAO_REDIRECT_URI` 를 같게 맞추세요. 로그인 후 이동한 페이지의 주소를 붙여 넣으라는 안내가 나옵니다.
 - 갱신되는 토큰을 저장해야 해서 카카오톡 발송은 로컬 실행에서만 지원합니다(GitHub Actions 대안에서는 불가).
+
+### 휴대폰용 페이지 (GitHub Pages)
+
+메신저의 '전체 브리핑 보기'를 누르면 휴대폰에서 읽기 좋게 정리한 페이지가 열립니다. 기사 카드, 사업가의 시선, 접어 둔 전체 후보, 이전·다음 브리핑 이동이 들어 있고, 다크 모드도 따라갑니다.
+
+1. 저장소 **Settings → Pages** 에서 Source 를 `Deploy from a branch`, 브랜치 `main`, 폴더 `/docs` 로 저장합니다. 터미널이라면:
+   ```bash
+   gh api -X POST repos/<계정>/<저장소>/pages -f "source[branch]=main" -f "source[path]=/docs"
+   ```
+2. 주소는 `https://<계정>.github.io/<저장소>/` 입니다(날짜별 모아보기).
+3. 끄려면 `config/sources.yaml` 의 `web_page: false`. 그러면 링크가 GitHub 의 마크다운 파일로 바뀝니다.
+
+- 매일 실행은 **커밋·push → 페이지 배포 확인(최대 5분) → 발송** 순서라, 메시지를 받자마자 눌러도 열립니다.
+- 공개 저장소의 Pages 는 누구나 볼 수 있습니다(검색 엔진 색인만 막아 둠). 비공개 저장소의 Pages 는 GitHub 유료 플랜이 필요합니다.
 
 ### 수동 실행
 
@@ -108,14 +125,14 @@ bash scripts/run_local.sh               # 예약 실행과 동일 (pull → 브�
     tags: [ai]
   ```
 - **산업군 트래킹**: `tracks` 아래 항목의 `enabled: true` 로 켭니다. 해당 소스가 수집에 합류하고, `description` 이 LLM의 '중점 관찰 분야'로 들어가 관련 기사에 가중치가 붙습니다. 새 산업군은 예시 블록을 복사해 키워드만 바꾸면 됩니다.
-- **분량**: `settings` 의 `top_n`(브리핑 건수), `min_score`, `max_candidates`(LLM에 넘길 후보 수 상한).
+- **분량**: `settings` 의 `top_n`(브리핑 건수), `min_score`, `max_candidates`(LLM에 넘길 후보 수 상한). 휴대폰용 페이지는 `web_page`.
 - **새 수집 방식**: `src/collector.py` 에 `@fetcher("새타입")` 함수를 하나 추가하면 yaml에서 바로 쓸 수 있습니다.
 
 ## Vault 활용
 
 - `vault/raw/` 는 자동화만 씁니다. 매일 오늘의 소식(기사별 사실·발행일·관련 보도), 사업가의 시선(큰 그림, 오늘 기사에 맞는 시선 3~4개와 스스로 던져볼 질문), 전체 후보 목록(점수순, 2점 이하는 접힘), 소스별 수집 현황이 남습니다.
-- `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요. 자동 커밋은 `vault/raw` 와 `state` 만 올리므로 작성 중인 노트가 섞여 올라가지 않습니다.
-- 이 폴더를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다. 메신저 메시지의 '전체 브리핑 보기' 링크는 push 된 GitHub 파일로 연결됩니다.
+- `vault/curated/` 는 사람만 고칩니다. 다시 볼 가치가 있는 항목을 [`_template.md`](vault/curated/_template.md) 로 옮겨 내 인사이트를 덧붙이세요. 자동 커밋은 `vault/raw`, `state`, `docs` 만 올리므로 작성 중인 노트가 섞여 올라가지 않습니다.
+- 이 폴더를 그대로 [Obsidian](https://obsidian.md) Vault로 열 수 있습니다. 메신저의 '전체 브리핑 보기'는 같은 내용을 휴대폰용으로 만든 페이지(`docs/`)로 연결됩니다.
 
 ## 동작 메모
 
