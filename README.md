@@ -56,8 +56,8 @@ cp .env.example .env
 bash scripts/install_launchd.sh
 
 # 3) 지금 한 번 실행해 보기
-launchctl kickstart gui/$(id -u)/com.morning-brief.daily
-tail -f ~/Library/Logs/morning-brief.log
+bash scripts/run_local.sh
+tail -f ~/Library/Logs/morning-brief.log   # 예약 실행 로그
 ```
 
 | `.env` 항목 | 설명 |
@@ -71,7 +71,8 @@ tail -f ~/Library/Logs/morning-brief.log
 
 - 실행 시간 변경: `BRIEF_HOUR=6 BRIEF_MINUTE=30 bash scripts/install_launchd.sh`
 - 해제: `bash scripts/install_launchd.sh --uninstall`
-- 그 시각에 Mac이 **잠자기** 중이면 깨어날 때 실행되고, **꺼져** 있으면 그날은 건너뜁니다. 매일 자동으로 깨우려면 `sudo pmset repeat wakeorpoweron MTWRFSU 06:55:00`.
+- 그 시각부터 **15분마다** 확인해, 그날 아직 안 돌았고 **인터넷이 될 때 한 번만** 실행합니다. 덮개를 닫아 둔 Mac 은 잠깐씩 깨어나도 네트워크가 없어서, 그런 날은 Mac 을 연 뒤 15분 안에 옵니다. 정확히 그 시각에 받으려면 `sudo pmset repeat wakeorpoweron MTWRFSU 06:55:00` (전원 연결 상태 권장). Mac 이 **꺼져** 있으면 켜진 뒤에 실행됩니다.
+- 오늘 실행 여부는 `.run.done`(날짜 한 줄)에 남습니다. 같은 날 다시 받으려면 `bash scripts/run_local.sh` 로 직접 실행하세요.
 - 분석은 `claude -p` 를 도구·MCP·개인 설정 없이 호출하며, 로그인된 구독의 사용량에서 차감됩니다. 환경에 `ANTHROPIC_API_KEY` 가 있어도 claude 에는 넘기지 않아 API 과금으로 바뀌지 않습니다.
 
 ### 카카오톡으로 받기

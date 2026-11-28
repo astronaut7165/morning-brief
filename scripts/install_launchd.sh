@@ -2,6 +2,9 @@
 # 매일 아침 이 Mac 에서 브리핑이 자동으로 돌도록 launchd 에 등록합니다.
 #   bash scripts/install_launchd.sh               # 07:00 에 등록 (BRIEF_HOUR / BRIEF_MINUTE 로 변경)
 #   bash scripts/install_launchd.sh --uninstall   # 해제
+#
+# 그 시각부터 15분마다 깨워 보고, 그날 아직 안 돌았고 인터넷이 될 때 한 번만 실행한다
+# (판단은 run_local.sh). 잠자기·오프라인이던 날도 Mac 을 열면 곧 받아 볼 수 있다.
 set -euo pipefail
 
 LABEL="com.morning-brief.daily"
@@ -10,6 +13,7 @@ LOG="$HOME/Library/Logs/morning-brief.log"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOUR="${BRIEF_HOUR:-7}"
 MINUTE="${BRIEF_MINUTE:-0}"
+AT="$(printf '%02d:%02d' "$((10#$HOUR))" "$((10#$MINUTE))")"
 DOMAIN="gui/$(id -u)"
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -49,18 +53,17 @@ cat > "$PLIST" <<EOF
     <string>$REPO/scripts/run_local.sh</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>$HOUR</integer>
-    <key>Minute</key>
-    <integer>$MINUTE</integer>
-  </dict>
+  <array>
+$(for i in 0 15 30 45; do printf '    <dict><key>Minute</key><integer>%d</integer></dict>\n' $(( (10#$MINUTE + i) % 60 )); done)
+  </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
     <string>$RUN_PATH</string>
     <key>LANG</key>
     <string>ko_KR.UTF-8</string>
+    <key>BRIEF_AT</key>
+    <string>$AT</string>
   </dict>
   <key>StandardOutPath</key>
   <string>$LOG</string>
@@ -74,11 +77,11 @@ plutil -lint "$PLIST" >/dev/null
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 launchctl bootstrap "$DOMAIN" "$PLIST"
 
-printf '등록 완료: 매일 %02d:%02d 에 실행됩니다.\n' "$HOUR" "$MINUTE"
-echo "  지금 바로 실행: launchctl kickstart $DOMAIN/$LABEL"
+echo "등록 완료: 매일 $AT 에 실행됩니다. (그때 잠자기·오프라인이면 15분마다 다시 시도해 하루 한 번)"
+echo "  지금 바로 실행: bash \"$REPO/scripts/run_local.sh\""
 echo "  로그 보기:      tail -f \"$LOG\""
 echo "  해제:          bash scripts/install_launchd.sh --uninstall"
 echo
-echo "참고: 그 시각에 Mac 이 잠자기 중이면 깨어날 때 실행되고, 꺼져 있으면 그날은 건너뜁니다."
+echo "참고: 덮개를 닫아 둔 Mac 은 네트워크가 끊겨 있어, 보통 Mac 을 연 뒤 15분 안에 실행됩니다."
 WAKE=$(( (10#$HOUR * 60 + 10#$MINUTE + 1435) % 1440 ))   # 실행 5분 전
 printf '      매일 자동으로 깨우려면: sudo pmset repeat wakeorpoweron MTWRFSU %02d:%02d:00\n' "$(( WAKE / 60 ))" "$(( WAKE % 60 ))"

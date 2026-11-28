@@ -11,6 +11,7 @@ __pycache__/
 .venv/
 venv/
 .run.lock/
+.run.done
 
 # os / editor
 .DS_Store
